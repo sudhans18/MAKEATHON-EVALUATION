@@ -1,5 +1,8 @@
-Frontend implementation is intentionally deferred while backend APIs are completed first.
+Frontend is implemented as a server-rendered SPA shell in:
+- `templates/index.html`
+- `static/css/app.css`
+- `static/js/app.js`
 
-Next step:
-- Build responsive admin and judge UI that consumes backend REST endpoints in `backend/app.py`.
-
+Current UI coverage:
+- Judge console: login, assigned teams, scoring form, autosave, final submission.
+- Admin dashboard: live overview, judges/teams/criteria CRUD, assignments, scores, rankings/overrides, deadline settings, CSV export link.

@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime
 from functools import wraps
 
-from flask import Flask, jsonify, request, session, send_file
+from flask import Flask, jsonify, request, session, send_file, render_template
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from config import Config
@@ -295,7 +295,13 @@ def register_routes(app):
 
     @app.errorhandler(404)
     def handle_not_found(_error):
-        return jsonify({"error": "Not found"}), 404
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Not found"}), 404
+        return render_template("index.html"), 404
+
+    @app.get("/")
+    def index():
+        return render_template("index.html")
 
     @app.get("/api/health")
     def health():
