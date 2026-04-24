@@ -1,0 +1,87 @@
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL CHECK(role IN ('admin', 'judge')),
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS teams (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    problem_statement TEXT NOT NULL DEFAULT '',
+    expected_solution TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS criteria (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    max_score REAL NOT NULL CHECK(max_score > 0),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS assignments (
+    judge_id INTEGER NOT NULL,
+    team_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (judge_id, team_id),
+    FOREIGN KEY (judge_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS scores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    judge_id INTEGER NOT NULL,
+    team_id INTEGER NOT NULL,
+    criterion_id INTEGER NOT NULL,
+    score REAL NOT NULL CHECK(score >= 0),
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (judge_id, team_id, criterion_id),
+    FOREIGN KEY (judge_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+    FOREIGN KEY (criterion_id) REFERENCES criteria(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS remarks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    judge_id INTEGER NOT NULL,
+    team_id INTEGER NOT NULL,
+    text TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (judge_id, team_id),
+    FOREIGN KEY (judge_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS submissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    judge_id INTEGER NOT NULL,
+    team_id INTEGER NOT NULL,
+    is_submitted INTEGER NOT NULL DEFAULT 0 CHECK(is_submitted IN (0, 1)),
+    submitted_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (judge_id, team_id),
+    FOREIGN KEY (judge_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ranking_overrides (
+    team_id INTEGER PRIMARY KEY,
+    override_rank INTEGER NOT NULL UNIQUE,
+    reason TEXT NOT NULL DEFAULT '',
+    updated_by INTEGER NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+    FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_scores_team ON scores(team_id);
+CREATE INDEX IF NOT EXISTS idx_scores_judge ON scores(judge_id);
+CREATE INDEX IF NOT EXISTS idx_submissions_team ON submissions(team_id);
+CREATE INDEX IF NOT EXISTS idx_assignments_judge ON assignments(judge_id);
