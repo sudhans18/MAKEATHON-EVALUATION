@@ -799,6 +799,7 @@ def register_routes(app):
             clean_ids = [int(team_id) for team_id in team_ids]
         except (TypeError, ValueError):
             return jsonify({"error": "team_ids must be integers"}), 400
+        clean_ids = sorted(set(clean_ids))
 
         with transaction():
             db = get_db()
@@ -807,6 +808,26 @@ def register_routes(app):
             ).fetchone()
             if not judge:
                 return jsonify({"error": "Judge not found"}), 404
+
+            if clean_ids:
+                placeholders = ",".join("?" for _ in clean_ids)
+                existing_rows = db.execute(
+                    f"SELECT id FROM teams WHERE id IN ({placeholders})",
+                    tuple(clean_ids),
+                ).fetchall()
+                existing_ids = {row["id"] for row in existing_rows}
+                invalid_ids = [team_id for team_id in clean_ids if team_id not in existing_ids]
+                if invalid_ids:
+                    return (
+                        jsonify(
+                            {
+                                "error": "Some team_ids are invalid",
+                                "invalid_team_ids": invalid_ids,
+                            }
+                        ),
+                        400,
+                    )
+
             db.execute("DELETE FROM assignments WHERE judge_id = ?", (judge_id,))
             for team_id in clean_ids:
                 db.execute(

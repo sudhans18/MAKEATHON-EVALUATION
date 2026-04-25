@@ -1,3 +1,5 @@
+import os
+
 from werkzeug.security import generate_password_hash
 
 from app import create_app
@@ -104,20 +106,24 @@ def seed():
                         (name, max_score),
                     )
 
-            judges = db.execute(
-                "SELECT id, name FROM users WHERE role = 'judge' ORDER BY id"
-            ).fetchall()
-            team_rows = db.execute("SELECT id FROM teams ORDER BY id").fetchall()
-            team_ids = [row["id"] for row in team_rows]
-            for judge in judges:
-                for team_id in team_ids:
-                    db.execute(
-                        """
-                        INSERT OR IGNORE INTO assignments (judge_id, team_id)
-                        VALUES (?, ?)
-                        """,
-                        (judge["id"], team_id),
-                    )
+            # Keep manual assignment ownership with admin UI by default.
+            # Optional: set AUTO_ASSIGN_ALL=1 to pre-assign all teams to all judges.
+            auto_assign_all = os.environ.get("AUTO_ASSIGN_ALL", "0") == "1"
+            if auto_assign_all:
+                judges = db.execute(
+                    "SELECT id FROM users WHERE role = 'judge' ORDER BY id"
+                ).fetchall()
+                team_rows = db.execute("SELECT id FROM teams ORDER BY id").fetchall()
+                team_ids = [row["id"] for row in team_rows]
+                for judge in judges:
+                    for team_id in team_ids:
+                        db.execute(
+                            """
+                            INSERT OR IGNORE INTO assignments (judge_id, team_id)
+                            VALUES (?, ?)
+                            """,
+                            (judge["id"], team_id),
+                        )
 
             db.execute(
                 "DELETE FROM settings WHERE key = 'submission_deadline'"
@@ -126,6 +132,7 @@ def seed():
     print("Sample data seeded.")
     print("Admin login: admin / admin123")
     print("Judge login: judge_1 / judge123")
+    print("Assignments: manual via Admin panel (AUTO_ASSIGN_ALL=1 to pre-assign all).")
 
 
 if __name__ == "__main__":
