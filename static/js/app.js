@@ -18,9 +18,11 @@
       evaluation: null,
       dirty: false,
       saveTimer: null,
-      saveInFlight: false,
+      syncInFlight: false,
       pendingRetry: false,
       lastSavedAt: null,
+      queueTimer: null,
+      localDebounceMs: 2500,
     },
   };
 
@@ -114,13 +116,166 @@
   function setNetworkStatus() {
     if (navigator.onLine) {
       if (state.judge.pendingRetry) {
-        setBanner(els.networkBanner, "Back online. Retrying draft save...", "info");
+        setBanner(els.networkBanner, "Back online. Retrying unsynced drafts...", "info");
       } else {
         setBanner(els.networkBanner, "", "");
       }
     } else {
       setBanner(els.networkBanner, "You are offline. Actions will retry when connection returns.", "error");
     }
+  }
+
+  function getLocalDraftKey(teamId) {
+    if (!state.user) return null;
+    return "scores_" + state.user.id + "_" + teamId;
+  }
+
+  function getTeamsCacheKey() {
+    if (!state.user) return null;
+    return "judgeTeams_" + state.user.id;
+  }
+
+  function getPendingQueueKey() {
+    return "pendingQueue";
+  }
+
+  function readAllPendingQueue() {
+    try {
+      var raw = window.localStorage.getItem(getPendingQueueKey());
+      var rows = raw ? JSON.parse(raw) : [];
+      return Array.isArray(rows) ? rows : [];
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  function readPendingQueue() {
+    if (!state.user) return [];
+    var all = readAllPendingQueue();
+    var mine = [];
+    for (var i = 0; i < all.length; i += 1) {
+      if (Number(all[i].judgeId) === Number(state.user.id)) mine.push(all[i]);
+    }
+    return mine;
+  }
+
+  function writePendingQueue(queue) {
+    var all = readAllPendingQueue();
+    var mine = queue || [];
+    var others = [];
+    for (var i = 0; i < all.length; i += 1) {
+      if (!state.user || Number(all[i].judgeId) !== Number(state.user.id)) {
+        others.push(all[i]);
+      }
+    }
+    var next = others.concat(mine);
+    window.localStorage.setItem(getPendingQueueKey(), JSON.stringify(next));
+    state.judge.pendingRetry = !!mine.length;
+    setNetworkStatus();
+  }
+
+  function readLocalDraft(teamId) {
+    var key = getLocalDraftKey(teamId);
+    if (!key) return null;
+    try {
+      var raw = window.localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function readCachedTeams() {
+    var key = getTeamsCacheKey();
+    if (!key) return [];
+    try {
+      var raw = window.localStorage.getItem(key);
+      var rows = raw ? JSON.parse(raw) : [];
+      return Array.isArray(rows) ? rows : [];
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  function writeCachedTeams(teams) {
+    var key = getTeamsCacheKey();
+    if (!key) return;
+    window.localStorage.setItem(key, JSON.stringify(teams || []));
+  }
+
+  function writeLocalDraft(teamId, payload, synced, metadata) {
+    var key = getLocalDraftKey(teamId);
+    if (!key) return;
+    var existing = readLocalDraft(teamId) || {};
+    var nextValue = {
+      scores: payload.scores || {},
+      remarks: payload.remarks || "",
+      lastUpdated: new Date().toISOString(),
+      synced: !!synced,
+      criteria: metadata && metadata.criteria ? metadata.criteria : (existing.criteria || []),
+      team: metadata && metadata.team ? metadata.team : (existing.team || null),
+      finalSubmitted: metadata && metadata.finalSubmitted ? true : !!existing.finalSubmitted,
+    };
+    window.localStorage.setItem(key, JSON.stringify(nextValue));
+  }
+
+  function markLocalDraftSynced(teamId, synced) {
+    var existing = readLocalDraft(teamId);
+    if (!existing) return;
+    existing.synced = !!synced;
+    existing.lastUpdated = new Date().toISOString();
+    window.localStorage.setItem(getLocalDraftKey(teamId), JSON.stringify(existing));
+  }
+
+  function upsertQueueItem(item) {
+    var queue = readPendingQueue();
+    var replaced = false;
+    for (var i = 0; i < queue.length; i += 1) {
+      var row = queue[i];
+      if (
+        row.type === item.type &&
+        Number(row.teamId) === Number(item.teamId) &&
+        Number(row.judgeId) === Number(item.judgeId)
+      ) {
+        queue[i] = item;
+        replaced = true;
+        break;
+      }
+    }
+    if (!replaced) queue.push(item);
+    writePendingQueue(queue);
+  }
+
+  function removeQueueHead() {
+    var queue = readPendingQueue();
+    queue.shift();
+    writePendingQueue(queue);
+  }
+
+  function teamServerStatus(team) {
+    if (team.status === "submitted") {
+      return { code: "submitted", label: "Final submitted" };
+    }
+    if (team.status === "in_progress") {
+      return { code: "synced_draft", label: "Synced to server" };
+    }
+    return { code: "not_started", label: "Not started" };
+  }
+
+  function teamDisplayStatus(team) {
+    if (!state.user) return teamServerStatus(team);
+    var local = readLocalDraft(team.id);
+    if (!local) return teamServerStatus(team);
+    if (team.status === "submitted" || local.finalSubmitted) {
+      return { code: "submitted", label: "Final submitted" };
+    }
+    if (local.synced === false) {
+      return { code: "local_draft", label: "Draft saved (local)" };
+    }
+    if (team.status === "in_progress" || local.synced === true) {
+      return { code: "synced_draft", label: "Synced to server" };
+    }
+    return { code: "not_started", label: "Not started" };
   }
 
   async function api(path, options) {
@@ -144,7 +299,10 @@
     var ct = response.headers.get("content-type") || "";
     var data = ct.indexOf("application/json") >= 0 ? await response.json() : await response.text();
     if (!response.ok) {
-      throw new Error((data && data.error) || ("Request failed with status " + response.status));
+      var err = new Error((data && data.error) || ("Request failed with status " + response.status));
+      err.status = response.status;
+      err.payload = data;
+      throw err;
     }
     return data;
   }
@@ -166,7 +324,9 @@
 
   function statusLabel(status) {
     if (status === "in_progress") return "In Progress";
-    if (status === "submitted") return "Submitted";
+    if (status === "local_draft") return "Draft saved (local)";
+    if (status === "synced_draft") return "Synced to server";
+    if (status === "submitted") return "Final submitted";
     return "Not Started";
   }
 
@@ -196,9 +356,10 @@
       return;
     }
     els.teamsGrid.innerHTML = state.judge.teams.map(function (team) {
+      var visualStatus = teamDisplayStatus(team);
       return "<article class='team-card'>" +
         "<div class='section-head'><h3>" + escapeHtml(team.name) + "</h3>" +
-        "<span class='status-badge status-" + team.status + "'>" + statusLabel(team.status) + "</span></div>" +
+        "<span class='status-badge status-" + visualStatus.code + "'>" + statusLabel(visualStatus.code) + "</span></div>" +
         "<p>Open scoring form for this team.</p>" +
         "<button class='btn btn-secondary' data-team-id='" + team.id + "' type='button'>Open</button></article>";
     }).join("");
@@ -213,9 +374,9 @@
     els.evaluationPanel.classList.remove("hidden");
     els.evalTitle.textContent = evaluation.team.name + " Evaluation";
     var team = getCurrentJudgeTeam();
-    var status = team ? team.status : "not_started";
-    els.evalStatusBadge.className = "status-badge status-" + status;
-    els.evalStatusBadge.textContent = statusLabel(status);
+    var visualStatus = team ? teamDisplayStatus(team) : { code: "not_started", label: "Not started" };
+    els.evalStatusBadge.className = "status-badge status-" + visualStatus.code;
+    els.evalStatusBadge.textContent = statusLabel(visualStatus.code);
     els.problemText.textContent = evaluation.team.problem_statement || "No problem statement available.";
     els.solutionText.textContent = evaluation.team.expected_solution || "No expected solution available.";
     els.deadlineText.textContent = evaluation.submission_deadline ?
@@ -231,14 +392,18 @@
     }).join("");
     els.remarksInput.value = evaluation.remarks || "";
     state.judge.dirty = false;
-    state.judge.pendingRetry = false;
-    els.retrySaveBtn.classList.add("hidden");
+    state.judge.pendingRetry = readPendingQueue().length > 0;
+    els.retrySaveBtn.classList.toggle("hidden", !state.judge.pendingRetry);
 
     var isSubmitted = evaluation.submission && evaluation.submission.is_submitted === 1;
     setJudgeDisabled(!evaluation.editable || isSubmitted);
     if (isSubmitted) setSaveState("Final submission completed.");
     else if (!evaluation.editable) setSaveState("Editing locked due to submission deadline.");
-    else setSaveState(state.judge.lastSavedAt ? ("Draft saved at " + state.judge.lastSavedAt) : "No unsaved changes.");
+    else {
+      var local = state.judge.currentTeamId != null ? readLocalDraft(state.judge.currentTeamId) : null;
+      if (local && local.synced === false) setSaveState("Saved locally. Sync pending...");
+      else setSaveState(state.judge.lastSavedAt ? ("Synced at " + state.judge.lastSavedAt) : "No unsaved changes.");
+    }
   }
 
   function collectJudgePayload() {
@@ -256,53 +421,63 @@
     if (!state.judge.evaluation || !state.judge.evaluation.editable) return;
     if (state.judge.evaluation.submission && state.judge.evaluation.submission.is_submitted === 1) return;
     state.judge.dirty = true;
-    setSaveState("Unsaved changes...");
+    var payload = collectJudgePayload();
+    writeLocalDraft(
+      state.judge.currentTeamId,
+      payload,
+      false,
+      { criteria: state.judge.evaluation.criteria, team: state.judge.evaluation.team }
+    );
+    setSaveState("Saved locally. Sync pending...");
     if (state.judge.saveTimer) clearTimeout(state.judge.saveTimer);
-    state.judge.saveTimer = window.setTimeout(function () { saveJudgeDraft(true); }, 1500);
+    state.judge.saveTimer = window.setTimeout(function () { saveJudgeDraft(true); }, state.judge.localDebounceMs);
   }
 
   async function saveJudgeDraft(isAuto) {
-    if (!state.judge.evaluation || state.judge.currentTeamId == null) return;
-    if (state.judge.saveInFlight) {
-      state.judge.pendingRetry = true;
-      return;
-    }
+    if (!state.user || !state.judge.evaluation || state.judge.currentTeamId == null) return;
     if (isAuto && !state.judge.dirty) return;
-    state.judge.saveInFlight = true;
-    try {
-      await api("/api/judge/teams/" + state.judge.currentTeamId + "/draft", {
-        method: "PUT",
-        body: JSON.stringify(collectJudgePayload()),
-      });
-      state.judge.dirty = false;
-      state.judge.pendingRetry = false;
-      state.judge.lastSavedAt = new Date().toLocaleTimeString();
-      els.retrySaveBtn.classList.add("hidden");
-      setSaveState("Draft saved at " + state.judge.lastSavedAt);
-      var team = getCurrentJudgeTeam();
-      if (team && team.status !== "submitted") team.status = "in_progress";
-      renderJudgeTeams();
-      renderJudgeEvaluation();
-    } catch (error) {
-      state.judge.pendingRetry = true;
-      els.retrySaveBtn.classList.remove("hidden");
-      setSaveState("Save failed. Waiting to retry.");
-      showAlert(error.message);
-    } finally {
-      state.judge.saveInFlight = false;
-    }
+    var payload = collectJudgePayload();
+    writeLocalDraft(
+      state.judge.currentTeamId,
+      payload,
+      false,
+      { criteria: state.judge.evaluation.criteria, team: state.judge.evaluation.team }
+    );
+    upsertQueueItem({
+      type: "draft",
+      judgeId: state.user.id,
+      teamId: state.judge.currentTeamId,
+      payload: payload,
+      enqueuedAt: new Date().toISOString(),
+    });
+    state.judge.dirty = false;
+    els.retrySaveBtn.classList.remove("hidden");
+    setSaveState("Saved locally. Sync pending...");
+    renderJudgeTeams();
+    await processPendingQueue();
   }
 
   async function submitJudgeFinal() {
-    if (!state.judge.evaluation || state.judge.currentTeamId == null) return;
+    if (!state.user || !state.judge.evaluation || state.judge.currentTeamId == null) return;
     if (!window.confirm("Submit final scores?")) return;
     els.submitBtn.disabled = true;
     try {
-      await api("/api/judge/teams/" + state.judge.currentTeamId + "/submit", {
-        method: "POST",
-        body: JSON.stringify(collectJudgePayload()),
+      var payload = collectJudgePayload();
+      writeLocalDraft(
+        state.judge.currentTeamId,
+        payload,
+        false,
+        { criteria: state.judge.evaluation.criteria, team: state.judge.evaluation.team }
+      );
+      upsertQueueItem({
+        type: "submit",
+        judgeId: state.user.id,
+        teamId: state.judge.currentTeamId,
+        payload: payload,
+        enqueuedAt: new Date().toISOString(),
       });
-      showAlert("Final scores submitted.", "info");
+      setSaveState("Final queued locally. Waiting to sync...");
+      await processPendingQueue();
       await loadJudgeTeams();
       await openJudgeEvaluation(state.judge.currentTeamId);
     } catch (error) {
@@ -312,15 +487,151 @@
     }
   }
 
+  function queueUnsyncedLocalDrafts() {
+    if (!state.user) return;
+    for (var i = 0; i < state.judge.teams.length; i += 1) {
+      var team = state.judge.teams[i];
+      var draft = readLocalDraft(team.id);
+      if (!draft || draft.synced !== false || draft.finalSubmitted) continue;
+      upsertQueueItem({
+        type: "draft",
+        judgeId: state.user.id,
+        teamId: team.id,
+        payload: { scores: draft.scores || {}, remarks: draft.remarks || "" },
+        enqueuedAt: new Date().toISOString(),
+      });
+    }
+  }
+
+  async function processPendingQueue() {
+    if (!state.user || !navigator.onLine || state.judge.syncInFlight) return;
+    var queue = readPendingQueue();
+    if (!queue.length) {
+      els.retrySaveBtn.classList.add("hidden");
+      return;
+    }
+
+    state.judge.syncInFlight = true;
+    var head = queue[0];
+    try {
+      var path = "/api/judge/teams/" + head.teamId + (head.type === "submit" ? "/submit" : "/draft");
+      var method = head.type === "submit" ? "POST" : "PUT";
+      await api(path, { method: method, body: JSON.stringify(head.payload) });
+
+      markLocalDraftSynced(head.teamId, true);
+      if (head.type === "submit") {
+        var local = readLocalDraft(head.teamId) || {};
+        local.finalSubmitted = true;
+        local.synced = true;
+        window.localStorage.setItem(getLocalDraftKey(head.teamId), JSON.stringify(local));
+      }
+
+      var team = null;
+      for (var i = 0; i < state.judge.teams.length; i += 1) {
+        if (state.judge.teams[i].id === Number(head.teamId)) {
+          team = state.judge.teams[i];
+          break;
+        }
+      }
+      if (team) {
+        team.status = head.type === "submit" ? "submitted" : "in_progress";
+      }
+      removeQueueHead();
+      state.judge.lastSavedAt = new Date().toLocaleTimeString();
+      els.retrySaveBtn.classList.add("hidden");
+      setSaveState(head.type === "submit" ? "Final synced." : ("Synced at " + state.judge.lastSavedAt));
+      renderJudgeTeams();
+      renderJudgeEvaluation();
+      if (readPendingQueue().length) {
+        window.setTimeout(processPendingQueue, 50);
+      }
+    } catch (error) {
+      var isSubmitImmutable =
+        head.type === "submit" &&
+        (error.status === 409 || /already submitted|immutable/i.test(error.message || ""));
+      var isDraftImmutable =
+        head.type === "draft" &&
+        (error.status === 409 || /immutable/i.test(error.message || ""));
+      if (isSubmitImmutable || isDraftImmutable) {
+        markLocalDraftSynced(head.teamId, true);
+        removeQueueHead();
+        if (isSubmitImmutable) {
+          var localSubmitted = readLocalDraft(head.teamId) || {};
+          localSubmitted.finalSubmitted = true;
+          localSubmitted.synced = true;
+          window.localStorage.setItem(getLocalDraftKey(head.teamId), JSON.stringify(localSubmitted));
+        }
+      } else {
+        els.retrySaveBtn.classList.remove("hidden");
+      }
+    } finally {
+      state.judge.syncInFlight = false;
+    }
+  }
+
   async function loadJudgeTeams() {
-    state.judge.teams = await api("/api/judge/teams");
+    try {
+      state.judge.teams = await api("/api/judge/teams");
+      writeCachedTeams(state.judge.teams);
+    } catch (error) {
+      state.judge.teams = readCachedTeams();
+      if (!state.judge.teams.length) throw error;
+      showAlert("Loaded cached teams from local device.", "info");
+    }
+    queueUnsyncedLocalDrafts();
     renderJudgeTeams();
   }
 
   async function openJudgeEvaluation(teamId) {
     state.judge.currentTeamId = Number(teamId);
-    state.judge.evaluation = await api("/api/judge/teams/" + teamId + "/evaluation");
-    renderJudgeEvaluation();
+    var local = readLocalDraft(teamId);
+    if (local && local.criteria && local.team) {
+      state.judge.evaluation = {
+        team: local.team,
+        criteria: local.criteria,
+        scores: local.scores || {},
+        remarks: local.remarks || "",
+        submission: {
+          is_submitted: local.finalSubmitted ? 1 : 0,
+          submitted_at: null,
+          updated_at: local.lastUpdated || null,
+        },
+        editable: !local.finalSubmitted,
+        submission_deadline: null,
+      };
+      renderJudgeEvaluation();
+    }
+    try {
+      var serverEvaluation = await api("/api/judge/teams/" + teamId + "/evaluation");
+      if (
+        local &&
+        local.synced === false &&
+        serverEvaluation.submission &&
+        serverEvaluation.submission.is_submitted !== 1
+      ) {
+        serverEvaluation.scores = local.scores || serverEvaluation.scores || {};
+        serverEvaluation.remarks = local.remarks || serverEvaluation.remarks || "";
+      }
+      state.judge.evaluation = serverEvaluation;
+      writeLocalDraft(
+        teamId,
+        { scores: state.judge.evaluation.scores || {}, remarks: state.judge.evaluation.remarks || "" },
+        true,
+        {
+          criteria: state.judge.evaluation.criteria || [],
+          team: state.judge.evaluation.team || null,
+          finalSubmitted: !!(
+            state.judge.evaluation.submission &&
+            state.judge.evaluation.submission.is_submitted === 1
+          ),
+        }
+      );
+      renderJudgeEvaluation();
+    } catch (error) {
+      if (!local) throw error;
+      setSaveState("Loaded local draft (offline mode).");
+      setNetworkStatus();
+    }
   }
 
   function stopAdminAutoRefresh() {
@@ -517,6 +828,10 @@
 
   async function logout() {
     stopAdminAutoRefresh();
+    if (state.judge.queueTimer) {
+      clearInterval(state.judge.queueTimer);
+      state.judge.queueTimer = null;
+    }
     try {
       await api("/api/auth/logout", { method: "POST", body: "{}" });
     } catch (_error) {}
@@ -539,6 +854,9 @@
         if (state.user.role === "judge") {
           showMode("judge");
           await loadJudgeTeams();
+          state.judge.pendingRetry = readPendingQueue().length > 0;
+          setNetworkStatus();
+          processPendingQueue();
         } else if (state.user.role === "admin") {
           showMode("admin");
           switchAdminTab("overview");
@@ -555,7 +873,8 @@
     els.logoutBtn.addEventListener("click", logout);
     window.addEventListener("online", function () {
       setNetworkStatus();
-      if (state.judge.pendingRetry) saveJudgeDraft(false);
+      queueUnsyncedLocalDrafts();
+      processPendingQueue();
     });
     window.addEventListener("offline", setNetworkStatus);
   }
@@ -581,11 +900,12 @@
     els.criteriaGrid.addEventListener("input", markJudgeDirty);
     els.remarksInput.addEventListener("input", markJudgeDirty);
     els.saveDraftBtn.addEventListener("click", function () { saveJudgeDraft(false); });
-    els.retrySaveBtn.addEventListener("click", function () { saveJudgeDraft(false); });
+    els.retrySaveBtn.addEventListener("click", function () { processPendingQueue(); });
     els.submitBtn.addEventListener("click", submitJudgeFinal);
-    window.setInterval(function () {
-      if (state.judge.pendingRetry && navigator.onLine) saveJudgeDraft(false);
-    }, 8000);
+    if (state.judge.queueTimer) clearInterval(state.judge.queueTimer);
+    state.judge.queueTimer = window.setInterval(function () {
+      processPendingQueue();
+    }, 5000);
   }
 
   function attachAdminEvents() {
@@ -786,6 +1106,9 @@
       if (state.user.role === "judge") {
         showMode("judge");
         await loadJudgeTeams();
+        state.judge.pendingRetry = readPendingQueue().length > 0;
+        setNetworkStatus();
+        processPendingQueue();
       } else if (state.user.role === "admin") {
         showMode("admin");
         switchAdminTab("overview");
@@ -800,4 +1123,3 @@
 
   bootstrap();
 })();
-

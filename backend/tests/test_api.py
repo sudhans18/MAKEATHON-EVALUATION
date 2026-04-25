@@ -22,6 +22,7 @@ class HackathonApiTests(unittest.TestCase):
         self.db_path = db_path
         os.environ["DATABASE_PATH"] = db_path
         os.environ["SECRET_KEY"] = "test-secret"
+        os.environ["DISABLE_DB_BACKUP_WORKER"] = "1"
         self.app = create_app()
         self.app.config["TESTING"] = True
         self.team_id = None
@@ -32,6 +33,11 @@ class HackathonApiTests(unittest.TestCase):
             db.executescript(
                 """
                 DELETE FROM ranking_overrides;
+                DELETE FROM final_remarks;
+                DELETE FROM final_scores;
+                DELETE FROM final_submissions;
+                DELETE FROM draft_remarks;
+                DELETE FROM draft_scores;
                 DELETE FROM submissions;
                 DELETE FROM remarks;
                 DELETE FROM scores;
@@ -156,6 +162,22 @@ class HackathonApiTests(unittest.TestCase):
             self.assertEqual(dashboard.status_code, 200)
             data = dashboard.get_json()
             self.assertGreaterEqual(data["counts"]["submitted"], 2)
+
+    def test_final_submission_is_immutable(self):
+        with self.app.test_client() as client:
+            self._login(client, "judge_a", "judge123")
+            c1, c2 = self.criteria_ids
+            submit_resp = client.post(
+                f"/api/judge/teams/{self.team_id}/submit",
+                json={"scores": {str(c1): 9, str(c2): 8}, "remarks": "Locked"},
+            )
+            self.assertEqual(submit_resp.status_code, 200)
+
+            edit_after_submit = client.put(
+                f"/api/judge/teams/{self.team_id}/draft",
+                json={"scores": {str(c1): 1, str(c2): 1}, "remarks": "Should fail"},
+            )
+            self.assertEqual(edit_after_submit.status_code, 409)
 
 
 if __name__ == "__main__":

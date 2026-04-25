@@ -1,24 +1,85 @@
 import csv
 import io
+import logging
+import os
 import sqlite3
+import threading
+import time
 from datetime import datetime
 from functools import wraps
+from logging.handlers import RotatingFileHandler
 
 from flask import Flask, jsonify, request, session, send_file, render_template
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from config import Config
-from db import close_db, get_db, init_db, transaction
+from db import close_db, get_db, init_connection_pool, init_db, transaction
+
+
+def _ensure_parent(path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+
+def _configure_logging(app):
+    os.makedirs(app.config["LOG_DIR"], exist_ok=True)
+    log_path = os.path.join(app.config["LOG_DIR"], "server.log")
+    file_handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5)
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    )
+    if not any(isinstance(h, RotatingFileHandler) for h in app.logger.handlers):
+        app.logger.addHandler(file_handler)
+    app.logger.setLevel(logging.INFO)
+    app.logger.propagate = False
+
+
+def _backup_database_file(db_path, backup_dir):
+    os.makedirs(backup_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = os.path.join(backup_dir, f"backup_{timestamp}.db")
+    src = sqlite3.connect(db_path, timeout=30.0)
+    dest = sqlite3.connect(backup_path, timeout=30.0)
+    try:
+        src.backup(dest)
+    finally:
+        dest.close()
+        src.close()
+    return backup_path
+
+
+def _start_backup_worker(app):
+    interval = max(30, int(app.config["DB_BACKUP_INTERVAL_SECONDS"]))
+    db_path = app.config["DATABASE_PATH"]
+    backup_dir = app.config["DB_BACKUP_DIR"]
+
+    def _loop():
+        while True:
+            time.sleep(interval)
+            try:
+                with app.app_context():
+                    path = _backup_database_file(db_path, backup_dir)
+                    app.logger.info("Automatic DB backup created: %s", path)
+            except Exception:
+                app.logger.exception("Automatic DB backup failed")
+
+    worker = threading.Thread(target=_loop, name="db-backup-worker", daemon=True)
+    worker.start()
 
 
 def create_app():
     app = Flask(__name__, template_folder="../templates", static_folder="../static")
     app.config.from_object(Config)
+    _ensure_parent(app.config["DATABASE_PATH"])
+    _configure_logging(app)
+    init_connection_pool(app)
     app.teardown_appcontext(close_db)
 
     with app.app_context():
         init_db()
 
+    if os.environ.get("DISABLE_DB_BACKUP_WORKER", "0") != "1":
+        _start_backup_worker(app)
     register_routes(app)
     return app
 
@@ -126,7 +187,7 @@ def _validate_score_payload(scores_payload, criteria_lookup):
     return errors, cleaned
 
 
-def _save_evaluation(db, judge_id, team_id, scores_payload, remarks_text, submit=False):
+def _save_draft_evaluation(db, judge_id, team_id, scores_payload, remarks_text):
     criteria_lookup, _ = _criteria_map(db)
     errors, cleaned_scores = _validate_score_payload(scores_payload, criteria_lookup)
     if errors:
@@ -134,11 +195,23 @@ def _save_evaluation(db, judge_id, team_id, scores_payload, remarks_text, submit
 
     try:
         with transaction():
+            already_submitted = db.execute(
+                """
+                SELECT id
+                FROM final_submissions
+                WHERE judge_id = ? AND team_id = ?
+                LIMIT 1
+                """,
+                (judge_id, team_id),
+            ).fetchone()
+            if already_submitted:
+                raise ValueError("Final submission already locked and immutable")
+
             for criterion_id, score_value in cleaned_scores.items():
                 if score_value is None:
                     db.execute(
                         """
-                        DELETE FROM scores
+                        DELETE FROM draft_scores
                         WHERE judge_id = ? AND team_id = ? AND criterion_id = ?
                         """,
                         (judge_id, team_id, int(criterion_id)),
@@ -146,7 +219,7 @@ def _save_evaluation(db, judge_id, team_id, scores_payload, remarks_text, submit
                     continue
                 db.execute(
                     """
-                    INSERT INTO scores (judge_id, team_id, criterion_id, score, updated_at)
+                    INSERT INTO draft_scores (judge_id, team_id, criterion_id, score, updated_at)
                     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
                     ON CONFLICT(judge_id, team_id, criterion_id)
                     DO UPDATE SET score = excluded.score, updated_at = CURRENT_TIMESTAMP
@@ -157,7 +230,86 @@ def _save_evaluation(db, judge_id, team_id, scores_payload, remarks_text, submit
             if remarks_text is not None:
                 db.execute(
                     """
-                    INSERT INTO remarks (judge_id, team_id, text, updated_at)
+                    INSERT INTO draft_remarks (judge_id, team_id, text, updated_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(judge_id, team_id)
+                    DO UPDATE SET text = excluded.text, updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (judge_id, team_id, remarks_text),
+                )
+    except ValueError as exc:
+        return False, [str(exc)]
+
+    return True, []
+
+
+def _load_draft_snapshot(db, judge_id, team_id):
+    draft_rows = db.execute(
+        """
+        SELECT criterion_id, score
+        FROM draft_scores
+        WHERE judge_id = ? AND team_id = ?
+        """,
+        (judge_id, team_id),
+    ).fetchall()
+    draft_scores = {int(row["criterion_id"]): float(row["score"]) for row in draft_rows}
+    draft_remarks = db.execute(
+        """
+        SELECT text
+        FROM draft_remarks
+        WHERE judge_id = ? AND team_id = ?
+        LIMIT 1
+        """,
+        (judge_id, team_id),
+    ).fetchone()
+    return draft_scores, (draft_remarks["text"] if draft_remarks else "")
+
+
+def _submit_final_evaluation(db, judge_id, team_id, scores_payload, remarks_text):
+    criteria_lookup, criteria_list = _criteria_map(db)
+    errors, cleaned_scores = _validate_score_payload(scores_payload, criteria_lookup)
+    if errors:
+        return False, errors, False
+
+    try:
+        with transaction():
+            existing_final = db.execute(
+                """
+                SELECT id, submitted_at
+                FROM final_submissions
+                WHERE judge_id = ? AND team_id = ?
+                LIMIT 1
+                """,
+                (judge_id, team_id),
+            ).fetchone()
+            if existing_final:
+                return True, [], True
+
+            # Merge inbound payload into draft first so "submit" is idempotent and atomic.
+            for criterion_id, score_value in cleaned_scores.items():
+                if score_value is None:
+                    db.execute(
+                        """
+                        DELETE FROM draft_scores
+                        WHERE judge_id = ? AND team_id = ? AND criterion_id = ?
+                        """,
+                        (judge_id, team_id, int(criterion_id)),
+                    )
+                    continue
+                db.execute(
+                    """
+                    INSERT INTO draft_scores (judge_id, team_id, criterion_id, score, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(judge_id, team_id, criterion_id)
+                    DO UPDATE SET score = excluded.score, updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (judge_id, team_id, int(criterion_id), score_value),
+                )
+
+            if remarks_text is not None:
+                db.execute(
+                    """
+                    INSERT INTO draft_remarks (judge_id, team_id, text, updated_at)
                     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
                     ON CONFLICT(judge_id, team_id)
                     DO UPDATE SET text = excluded.text, updated_at = CURRENT_TIMESTAMP
@@ -165,50 +317,76 @@ def _save_evaluation(db, judge_id, team_id, scores_payload, remarks_text, submit
                     (judge_id, team_id, remarks_text),
                 )
 
-            if submit:
-                criteria_count = db.execute("SELECT COUNT(*) AS c FROM criteria").fetchone()["c"]
-                scored_count = db.execute(
-                    """
-                    SELECT COUNT(*) AS c
-                    FROM scores
-                    WHERE judge_id = ? AND team_id = ?
-                    """,
-                    (judge_id, team_id),
-                ).fetchone()["c"]
-                if criteria_count == 0:
-                    raise ValueError("No criteria defined by admin yet")
-                if scored_count < criteria_count:
-                    raise ValueError("All criteria must be scored before final submission")
+            final_scores_map, final_remarks_text = _load_draft_snapshot(db, judge_id, team_id)
+            if not criteria_list:
+                raise ValueError("No criteria defined by admin yet")
+            if len(final_scores_map) < len(criteria_list):
+                raise ValueError("All criteria must be scored before final submission")
 
+            db.execute(
+                """
+                INSERT INTO final_submissions (judge_id, team_id, submitted_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(judge_id, team_id) DO NOTHING
+                """,
+                (judge_id, team_id),
+            )
+            for criterion in criteria_list:
+                criterion_id = int(criterion["id"])
                 db.execute(
                     """
-                    INSERT INTO submissions (
-                        judge_id, team_id, is_submitted, submitted_at, updated_at
-                    ) VALUES (?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                    ON CONFLICT(judge_id, team_id)
-                    DO UPDATE SET
-                        is_submitted = 1,
-                        submitted_at = CURRENT_TIMESTAMP,
-                        updated_at = CURRENT_TIMESTAMP
+                    INSERT INTO final_scores (judge_id, team_id, criterion_id, score, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(judge_id, team_id, criterion_id) DO NOTHING
                     """,
-                    (judge_id, team_id),
+                    (judge_id, team_id, criterion_id, final_scores_map[criterion_id]),
                 )
-            else:
+            db.execute(
+                """
+                INSERT INTO final_remarks (judge_id, team_id, text, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(judge_id, team_id) DO NOTHING
+                """,
+                (judge_id, team_id, final_remarks_text or ""),
+            )
+
+            # Backward-compatible mirrors for existing admin data consumers.
+            for criterion in criteria_list:
+                criterion_id = int(criterion["id"])
                 db.execute(
                     """
-                    INSERT INTO submissions (judge_id, team_id, is_submitted, updated_at)
-                    VALUES (?, ?, 0, CURRENT_TIMESTAMP)
-                    ON CONFLICT(judge_id, team_id)
-                    DO UPDATE SET
-                        is_submitted = 0,
-                        updated_at = CURRENT_TIMESTAMP
+                    INSERT INTO scores (judge_id, team_id, criterion_id, score, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(judge_id, team_id, criterion_id)
+                    DO UPDATE SET score = excluded.score, updated_at = CURRENT_TIMESTAMP
                     """,
-                    (judge_id, team_id),
+                    (judge_id, team_id, criterion_id, final_scores_map[criterion_id]),
                 )
+            db.execute(
+                """
+                INSERT INTO remarks (judge_id, team_id, text, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(judge_id, team_id)
+                DO UPDATE SET text = excluded.text, updated_at = CURRENT_TIMESTAMP
+                """,
+                (judge_id, team_id, final_remarks_text or ""),
+            )
+            db.execute(
+                """
+                INSERT INTO submissions (judge_id, team_id, is_submitted, submitted_at, updated_at)
+                VALUES (?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(judge_id, team_id)
+                DO UPDATE SET
+                    is_submitted = 1,
+                    submitted_at = COALESCE(submitted_at, CURRENT_TIMESTAMP),
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (judge_id, team_id),
+            )
     except ValueError as exc:
-        return False, [str(exc)]
+        return False, [str(exc)], False
 
-    return True, []
+    return True, [], False
 
 
 def _build_rankings(db):
@@ -289,9 +467,30 @@ def _build_rankings(db):
 
 
 def register_routes(app):
+    @app.after_request
+    def log_failed_requests(response):
+        if response.status_code >= 400:
+            app.logger.warning(
+                "HTTP %s %s -> %s",
+                request.method,
+                request.path,
+                response.status_code,
+            )
+        return response
+
+    @app.errorhandler(sqlite3.Error)
+    def handle_sqlite_error(error):
+        app.logger.exception("SQLite error on %s %s", request.method, request.path)
+        return jsonify({"error": "Database operation failed"}), 500
+
     @app.errorhandler(sqlite3.IntegrityError)
     def handle_integrity_error(_error):
         return jsonify({"error": "Database constraint violation"}), 409
+
+    @app.errorhandler(Exception)
+    def handle_unexpected_error(error):
+        app.logger.exception("Unhandled server error on %s %s", request.method, request.path)
+        return jsonify({"error": "Internal server error"}), 500
 
     @app.errorhandler(404)
     def handle_not_found(_error):
@@ -774,6 +973,22 @@ def register_routes(app):
             download_name="hackathon_rankings.csv",
         )
 
+    @app.get("/api/admin/export")
+    @app.get("/admin/export")
+    @role_required("admin")
+    def export_database(_user):
+        backup_path = _backup_database_file(
+            app.config["DATABASE_PATH"],
+            app.config["DB_BACKUP_DIR"],
+        )
+        app.logger.info("Manual DB export generated: %s", backup_path)
+        return send_file(
+            backup_path,
+            as_attachment=True,
+            download_name=os.path.basename(backup_path),
+            mimetype="application/octet-stream",
+        )
+
     @app.get("/api/admin/settings/submission-deadline")
     @role_required("admin")
     def get_deadline(_user):
@@ -815,23 +1030,22 @@ def register_routes(app):
             SELECT
                 t.id,
                 t.name,
-                t.problem_statement,
-                t.expected_solution,
-                COALESCE(sub.is_submitted, 0) AS is_submitted,
-                COALESCE(score_counts.score_count, 0) AS score_count,
-                COALESCE(r.text, '') AS remarks
+                CASE WHEN fs.id IS NULL THEN 0 ELSE 1 END AS is_submitted,
+                fs.submitted_at,
+                COALESCE(draft_counts.score_count, 0) AS draft_score_count,
+                COALESCE(dr.text, '') AS draft_remarks
             FROM assignments a
             JOIN teams t ON t.id = a.team_id
-            LEFT JOIN submissions sub
-                ON sub.judge_id = a.judge_id AND sub.team_id = a.team_id
+            LEFT JOIN final_submissions fs
+                ON fs.judge_id = a.judge_id AND fs.team_id = a.team_id
             LEFT JOIN (
                 SELECT judge_id, team_id, COUNT(*) AS score_count
-                FROM scores
+                FROM draft_scores
                 GROUP BY judge_id, team_id
-            ) score_counts
-                ON score_counts.judge_id = a.judge_id AND score_counts.team_id = a.team_id
-            LEFT JOIN remarks r
-                ON r.judge_id = a.judge_id AND r.team_id = a.team_id
+            ) draft_counts
+                ON draft_counts.judge_id = a.judge_id AND draft_counts.team_id = a.team_id
+            LEFT JOIN draft_remarks dr
+                ON dr.judge_id = a.judge_id AND dr.team_id = a.team_id
             WHERE a.judge_id = ?
             ORDER BY t.name
             """,
@@ -842,7 +1056,7 @@ def register_routes(app):
             status = "not_started"
             if row["is_submitted"] == 1:
                 status = "submitted"
-            elif row["score_count"] > 0 or (row["remarks"] or "").strip():
+            elif row["draft_score_count"] > 0 or (row["draft_remarks"] or "").strip():
                 status = "in_progress"
             item = dict(row)
             item["status"] = status
@@ -869,38 +1083,51 @@ def register_routes(app):
             return jsonify({"error": "Team not found"}), 404
 
         criteria = db.execute("SELECT id, name, max_score FROM criteria ORDER BY id").fetchall()
-        score_rows = db.execute(
+        final_submission = db.execute(
             """
+            SELECT submitted_at
+            FROM final_submissions
+            WHERE judge_id = ? AND team_id = ?
+            LIMIT 1
+            """,
+            (user["id"], team_id),
+        ).fetchone()
+
+        score_source_table = "draft_scores"
+        remarks_source_table = "draft_remarks"
+        if final_submission:
+            score_source_table = "final_scores"
+            remarks_source_table = "final_remarks"
+
+        score_rows = db.execute(
+            f"""
             SELECT criterion_id, score
-            FROM scores
+            FROM {score_source_table}
             WHERE judge_id = ? AND team_id = ?
             """,
             (user["id"], team_id),
         ).fetchall()
         scores = {str(row["criterion_id"]): row["score"] for row in score_rows}
         remarks = db.execute(
-            "SELECT text FROM remarks WHERE judge_id = ? AND team_id = ? LIMIT 1",
+            f"SELECT text FROM {remarks_source_table} WHERE judge_id = ? AND team_id = ? LIMIT 1",
             (user["id"], team_id),
         ).fetchone()
-        submission = db.execute(
-            """
-            SELECT is_submitted, submitted_at, updated_at
-            FROM submissions
-            WHERE judge_id = ? AND team_id = ?
-            LIMIT 1
-            """,
-            (user["id"], team_id),
-        ).fetchone()
+
         deadline = _get_submission_deadline(db)
+        is_submitted = 1 if final_submission else 0
+        editable = _is_editable(db) and not final_submission
         return jsonify(
             {
                 "team": team,
                 "criteria": criteria,
                 "scores": scores,
                 "remarks": remarks["text"] if remarks else "",
-                "submission": submission
-                or {"is_submitted": 0, "submitted_at": None, "updated_at": None},
-                "editable": _is_editable(db),
+                "submission": {
+                    "is_submitted": is_submitted,
+                    "submitted_at": final_submission["submitted_at"] if final_submission else None,
+                    "updated_at": final_submission["submitted_at"] if final_submission else None,
+                },
+                "editable": editable,
                 "submission_deadline": deadline.isoformat() if deadline else None,
             }
         )
@@ -913,19 +1140,29 @@ def register_routes(app):
             return jsonify({"error": "Team not assigned to this judge"}), 403
         if not _is_editable(db):
             return jsonify({"error": "Submission deadline passed. Editing is locked."}), 403
+        submitted = db.execute(
+            """
+            SELECT id
+            FROM final_submissions
+            WHERE judge_id = ? AND team_id = ?
+            LIMIT 1
+            """,
+            (user["id"], team_id),
+        ).fetchone()
+        if submitted:
+            return jsonify({"error": "Final submission is immutable."}), 409
 
         payload = request.get_json(silent=True) or {}
-        ok, errors = _save_evaluation(
+        ok, errors = _save_draft_evaluation(
             db,
             judge_id=user["id"],
             team_id=team_id,
             scores_payload=payload.get("scores") or {},
             remarks_text=payload.get("remarks"),
-            submit=False,
         )
         if not ok:
             return jsonify({"error": "Invalid draft payload", "details": errors}), 400
-        return jsonify({"success": True, "status": "in_progress"})
+        return jsonify({"success": True, "status": "in_progress", "synced": True})
 
     @app.post("/api/judge/teams/<int:team_id>/submit")
     @role_required("judge")
@@ -937,17 +1174,22 @@ def register_routes(app):
             return jsonify({"error": "Submission deadline passed. Editing is locked."}), 403
 
         payload = request.get_json(silent=True) or {}
-        ok, errors = _save_evaluation(
+        ok, errors, already_submitted = _submit_final_evaluation(
             db,
             judge_id=user["id"],
             team_id=team_id,
             scores_payload=payload.get("scores") or {},
             remarks_text=payload.get("remarks"),
-            submit=True,
         )
         if not ok:
             return jsonify({"error": "Could not submit evaluation", "details": errors}), 400
-        return jsonify({"success": True, "status": "submitted"})
+        return jsonify(
+            {
+                "success": True,
+                "status": "submitted",
+                "already_submitted": already_submitted,
+            }
+        )
 
 
 app = create_app()

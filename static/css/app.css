@@ -173,6 +173,8 @@ textarea { resize: vertical; min-height: 130px; }
 
 .status-not_started { background: #eef2ff; color: #4338ca; }
 .status-in_progress { background: #fffaeb; color: var(--warn); }
+.status-local_draft { background: #fff7ed; color: #9a3412; }
+.status-synced_draft { background: #ecfeff; color: #155e75; }
 .status-submitted { background: #ecfdf3; color: var(--success); }
 
 .content-box {
@@ -285,4 +287,3 @@ th { background: var(--surface-2); font-size: 0.9rem; }
   .criterion-row { grid-template-columns: 1fr; }
   .form-inline > * { width: 100%; }
 }
-
