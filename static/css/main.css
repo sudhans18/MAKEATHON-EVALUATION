@@ -1,4 +1,4 @@
-/* ===== Spider-Verse Design System ===== */
+/* ===== Evaluation System Design System ===== */
 :root {
   --bg-dark: #0a0a1a;
   --bg-panel: rgba(15, 20, 40, 0.88);
@@ -16,18 +16,6 @@
 }
 
 /* ===== Animations ===== */
-@keyframes glitch {
-  0%   { transform: translate(0); }
-  20%  { transform: translate(-2px, 2px); }
-  40%  { transform: translate(-2px, -2px); }
-  60%  { transform: translate(2px, 2px); }
-  80%  { transform: translate(2px, -2px); }
-  100% { transform: translate(0); }
-}
-@keyframes float {
-  0%, 100% { transform: translateY(0); opacity: 0.45; }
-  50%      { transform: translateY(-18px); opacity: 0.7; }
-}
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(12px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -105,27 +93,6 @@ h1, h2, h3 {
 .side-left  { left: 14px; writing-mode: vertical-rl; transform: translateY(-50%) rotate(180deg); }
 .side-right { right: 14px; writing-mode: vertical-rl; }
 .side-text b { color: var(--primary); opacity: 0.7; }
-
-/* Floating quotes — high visibility */
-.spider-quote {
-  position: fixed; font-family: 'Rajdhani', sans-serif; font-weight: 600;
-  font-size: 0.9rem; color: rgba(226, 232, 240, 0.7);
-  max-width: 220px; line-height: 1.45; pointer-events: none;
-  animation: float 16s ease-in-out infinite; font-style: italic;
-  text-shadow: 0 0 20px rgba(239, 68, 68, 0.15);
-}
-/* top-left branding is at top:36px left:40px, so q1 goes below it */
-.q1 { top: 22%; left: 4%; animation-delay: 0s; }
-/* top-right badge is at top:40px right:40px, so q4 goes below it */
-.q4 { top: 15%; right: 15%; animation-delay: 1.5s; }
-/* q5 left middle area, clear of side text at left:14px */
-.q5 { top: 48%; left: 4%; animation-delay: 8s; }
-/* q2 right lower area */
-.q2 { top: 65%; right: 12%; animation-delay: 3s; }
-/* bottom-left badge is at bottom:40px left:40px, so q3 goes above it */
-.q3 { bottom: 18%; left: 4%; animation-delay: 6s; }
-/* q6 bottom right */
-.q6 { bottom: 8%; right: 14%; animation-delay: 10s; }
 
 /* Detailed Info Modal Extras */
 #infoScoresBody tr:nth-child(even) { background: rgba(255,255,255,0.015); }
@@ -343,13 +310,37 @@ a.team-link:hover { color: var(--primary); text-decoration: underline; }
 /* ===== CRITERIA / EVAL ===== */
 .criteria-grid { display: grid; gap: 1rem; margin-top: 1rem; }
 .criterion-row {
-  display: grid; grid-template-columns: 1fr 120px; align-items: center; gap: 1rem;
-  padding: 1rem; background: rgba(0,0,0,0.2); border-radius: 0.6rem; border: 1px solid var(--border);
+  display: grid; grid-template-columns: 1fr 280px; align-items: center; gap: 1.5rem;
+  padding: 1.25rem; background: rgba(0,0,0,0.25); border-radius: 0.75rem; border: 1px solid var(--border);
+  transition: border-color 0.3s;
 }
-.criterion-row strong { font-size: 0.95rem; }
-.criterion-row small { display: block; color: var(--text-muted); font-size: 0.75rem; margin-top: 0.15rem; }
+.criterion-row:hover { border-color: var(--secondary); }
+.criterion-row strong { font-size: 1rem; color: var(--text-main); }
+.criterion-row small { display: block; color: var(--text-muted); font-size: 0.75rem; margin-top: 0.25rem; opacity: 0.7; }
+
+.slider-wrap { display: flex; align-items: center; gap: 1rem; }
+.slider-wrap input[type="range"] {
+  flex: 1; height: 6px; border-radius: 99px; background: rgba(255,255,255,0.1);
+  appearance: none; cursor: pointer; outline: none; border: none; padding: 0;
+}
+.slider-wrap input[type="range"]::-webkit-slider-thumb {
+  appearance: none; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--primary); border: 2px solid #fff; box-shadow: 0 0 10px var(--primary-glow);
+  transition: transform 0.2s;
+}
+.slider-wrap input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
+.score-val {
+  min-width: 48px; text-align: center; font-family: 'Rajdhani', sans-serif;
+  font-weight: 700; font-size: 1.1rem; color: var(--accent);
+  background: rgba(250, 204, 21, 0.1); border: 1px solid rgba(250, 204, 21, 0.2);
+  padding: 0.2rem 0.5rem; border-radius: 0.4rem;
+}
 .team-content { display: grid; gap: 1.25rem; margin-bottom: 2rem; }
-.content-box { padding: 1.25rem; background: rgba(0,0,0,0.2); border-radius: 0.75rem; border: 1px solid var(--border); font-size: 0.9rem; }
+.content-box {
+  padding: 1.25rem; background: rgba(0,0,0,0.2); border-radius: 0.75rem;
+  border: 1px solid var(--border); font-size: 0.9rem; line-height: 1.6;
+  white-space: pre-wrap;
+}
 .eval-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 2rem; padding-top: 1.25rem; border-top: 1px solid var(--border); }
 .action-group { display: flex; gap: 0.75rem; flex-wrap: wrap; }
 

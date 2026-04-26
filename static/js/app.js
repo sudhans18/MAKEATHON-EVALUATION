@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  console.log("Spider-Verse Judging Matrix v2.2 Loaded");
+  console.log("Evaluation System Portal v2.5 Loaded");
 
   var state = {
     user: null,
@@ -218,9 +218,9 @@
     if (sessionActions) sessionActions.classList.toggle("hidden", isLogin);
 
     if (mode === "judge") {
-        document.getElementById("pageTitle").textContent = "Judge Console";
+        document.getElementById("pageTitle").textContent = "Evaluation Console";
     } else if (mode === "admin") {
-        document.getElementById("pageTitle").textContent = "Admin Dashboard";
+        document.getElementById("pageTitle").textContent = "System Administration";
     }
 
     if (mode !== "admin") stopAdminAutoRefresh();
@@ -334,9 +334,14 @@
 
     els.criteriaGrid.innerHTML = (evaluation.criteria || []).map(function (c) {
       var v = evaluation.scores[String(c.id)];
-      var value = v == null ? "" : String(v);
-      return "<div class='criterion-row'><div><strong>" + escapeHtml(c.name) + "</strong><small>Range: 0 to " + c.max_score + "</small></div>" +
-        "<input type='number' step='0.1' min='0' max='" + c.max_score + "' data-criterion-id='" + c.id + "' value='" + value + "' /></div>";
+      var value = v == null ? 0 : Number(v);
+      return "<div class='criterion-row'>" +
+        "<div><strong>" + escapeHtml(c.name) + "</strong><small>Range: 0 to " + c.max_score + "</small></div>" +
+        "<div class='slider-wrap'>" +
+          "<input type='range' step='1' min='0' max='" + c.max_score + "' data-criterion-id='" + c.id + "' value='" + value + "' oninput='this.nextElementSibling.textContent = this.value' />" +
+          "<span class='score-val'>" + value + "</span>" +
+        "</div>" +
+      "</div>";
     }).join("");
     els.remarksInput.value = evaluation.remarks || "";
     state.judge.dirty = false;
@@ -472,22 +477,52 @@
 
 
 
+  var _teamSearchTerm = "";
+  var _teamCategoryFilter = "all";
+
   function renderTeamsTable() {
-    els.teamsTableBody.innerHTML = state.admin.teams.map(function (t) {
+    var filtered = state.admin.teams.filter(function(t) {
+      var matchesCat = _teamCategoryFilter === "all" || t.category === _teamCategoryFilter;
+      var matchesSearch = !_teamSearchTerm ||
+        t.name.toLowerCase().indexOf(_teamSearchTerm) !== -1 ||
+        (t.ps_id || "").toLowerCase().indexOf(_teamSearchTerm) !== -1;
+      return matchesCat && matchesSearch;
+    });
+
+      els.teamsTableBody.innerHTML = filtered.map(function (t) {
       var catClass = t.category === "HW" ? "cat-hw" : "cat-sw";
       var teamNameHtml = "<a href='#' class='team-link' data-action='view-info' data-id='" + t.id + "'>" + escapeHtml(t.name) + "</a>";
       return "<tr>" +
-        "<td><code class='muted'>" + escapeHtml(t.ps_id || "N/A") + "</code></td>" +
         "<td><strong>" + teamNameHtml + "</strong></td>" +
-        "<td><span class='cat-chip " + catClass + "'>" + t.category + "</span></td>" +
+        "<td><code class='muted'>" + escapeHtml(t.ps_id || "N/A") + "</code></td>" +
+        "<td><span class='cat-chip " + catClass + "'>" + (t.category === "HW" ? "⚙ Hardware" : "💻 Software") + "</span></td>" +
         "<td>" + t.assigned_judges + "</td>" +
-        "<td><button class='btn btn-secondary btn-sm' data-action='view-remarks' data-id='" + t.id + "' data-name='" + escapeHtml(t.name) + "' type='button'><i data-lucide='message-square' style='width:14px;'></i> Remarks</button></td>" +
+        "<td><button class='btn btn-secondary btn-sm' data-action='view-info' data-id='" + t.id + "' type='button'><i data-lucide='info' style='width:14px;'></i> Details</button></td>" +
         "<td>" +
         "<button class='btn btn-secondary' data-action='edit-team' data-id='" + t.id + "' type='button'><i data-lucide='edit' style='width:14px;'></i></button> " +
         "<button class='btn btn-danger' data-action='delete-team' data-id='" + t.id + "' type='button'><i data-lucide='trash' style='width:14px;'></i></button></td></tr>";
-    }).join("") || "<tr><td colspan='6'>No multiversal variants found.</td></tr>";
+    }).join("") || "<tr><td colspan='6'>No teams match your filter.</td></tr>";
     if (window.lucide) window.lucide.createIcons();
   }
+
+  // Teams search and category filter
+  document.addEventListener("DOMContentLoaded", function() {
+    var searchInput = document.getElementById("teamSearchInput");
+    if (searchInput) {
+      searchInput.addEventListener("input", function() {
+        _teamSearchTerm = this.value.toLowerCase().trim();
+        renderTeamsTable();
+      });
+    }
+    document.querySelectorAll(".cat-filter-btn").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        document.querySelectorAll(".cat-filter-btn").forEach(function(b) { b.classList.remove("active"); });
+        this.classList.add("active");
+        _teamCategoryFilter = this.getAttribute("data-cat");
+        renderTeamsTable();
+      });
+    });
+  });
 
 
   function renderCriteria() {
@@ -854,13 +889,13 @@
       } catch (error) { showAlert(error.message); }
     });
     els.teamsTableBody.addEventListener("click", async function (event) {
-      var btn = event.target.closest("button[data-action]");
-      if (!btn) return;
-      var id = Number(btn.getAttribute("data-id"));
-      var action = btn.getAttribute("data-action");
+      var target = event.target.closest("[data-action]");
+      if (!target) return;
+      var id = Number(target.getAttribute("data-id"));
+      var action = target.getAttribute("data-action");
       try {
         if (action === "view-remarks") {
-          var tname = btn.getAttribute("data-name");
+          var tname = target.getAttribute("data-name");
           els.modalTeamName.textContent = "Variant Remarks: " + tname;
           els.modalRemarksList.innerHTML = "<p class='muted'>Syncing with the Spider-Verse...</p>";
           els.remarksModal.classList.remove("hidden");
@@ -873,15 +908,44 @@
           }).join("") || "<p class='muted' style='padding: 2rem; text-align: center;'>No multi-versal echoes found.</p>";
         }
         if (action === "view-info") {
-          var team = null;
-          for (var i = 0; i < state.admin.teams.length; i += 1) if (state.admin.teams[i].id === id) team = state.admin.teams[i];
-          if (team) {
-             els.infoTeamName.textContent = team.name;
-             els.infoPsId.textContent = team.ps_id || "N/A";
-             els.infoCategory.innerHTML = "<span class='cat-chip " + (team.category === "HW" ? "cat-hw" : "cat-sw") + "'>" + team.category + "</span>";
-             els.infoProblem.textContent = team.problem_statement || "No description provided.";
-             els.infoExpected.textContent = team.expected_solution || "No expected solution provided.";
-             els.teamInfoModal.classList.remove("hidden");
+          var scoresBody = document.getElementById("infoScoresBody");
+          var remarksList = document.getElementById("infoRemarksList");
+          
+          els.infoTeamName.textContent = "Scanning Team Data...";
+          if (scoresBody) scoresBody.innerHTML = "<tr><td colspan='4' class='muted' style='text-align: center; padding: 1rem;'>Multiversal sync in progress...</td></tr>";
+          if (remarksList) remarksList.innerHTML = "<p class='muted' style='text-align: center; padding: 1rem;'>Fetching echoes...</p>";
+          els.teamInfoModal.classList.remove("hidden");
+
+          const data = await api("/api/admin/teams/" + id + "/details");
+          const team = data.team;
+
+          els.infoTeamName.textContent = team.name;
+          els.infoPsId.textContent = team.ps_id || "N/A";
+          els.infoCategory.innerHTML = "<span class='cat-chip " + (team.category === "HW" ? "cat-hw" : "cat-sw") + "'>" + (team.category === "HW" ? "⚙ Hardware" : "💻 Software") + "</span>";
+          els.infoProblem.textContent = team.problem_statement || "No description provided.";
+          els.infoExpected.textContent = team.expected_solution || "No expected solution provided.";
+
+          if (scoresBody) {
+            scoresBody.innerHTML = data.scores.map(function(s) {
+              return "<tr>" +
+                "<td>" + escapeHtml(s.round_name) + "</td>" +
+                "<td><strong>" + escapeHtml(s.judge_name) + "</strong></td>" +
+                "<td>" + escapeHtml(s.criterion_name) + "</td>" +
+                "<td><span style='color: var(--primary); font-weight: 800;'>" + s.score + "</span> / " + s.max_score + "</td>" +
+                "</tr>";
+            }).join("") || "<tr><td colspan='4' class='muted' style='text-align: center; padding: 1rem;'>Canon event pending (No scores yet).</td></tr>";
+          }
+
+          if (remarksList) {
+            remarksList.innerHTML = data.remarks.map(function(r) {
+              return "<div class='remark-card'>" +
+                "<div class='meta'>" +
+                "<span class='judge'>" + escapeHtml(r.judge_name) + "</span>" +
+                "<span class='round'>" + escapeHtml(r.round_name) + "</span>" +
+                "</div>" +
+                "<p class='text'>" + (escapeHtml(r.remarks) || "<i>No multiversal notes recorded.</i>") + "</p>" +
+                "</div>";
+            }).join("") || "<p class='muted' style='text-align: center; padding: 1rem;'>Silence across the web (No remarks yet).</p>";
           }
         }
         if (action === "delete-team") {

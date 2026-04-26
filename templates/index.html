@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Spider-Verse Judging Portal</title>
-  <link rel="stylesheet" href="/static/css/spiderman.css" />
+  <title>M.A.K.E Hackathon Evaluation Portal</title>
+  <link rel="stylesheet" href="/static/css/main.css" />
   <link href="https://fonts.googleapis.com/css2?family=Michroma&family=Rajdhani:wght@400;500;700&family=Outfit:wght@400;700&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/lucide@latest"></script>
 </head>
@@ -17,31 +17,23 @@
     <!-- ========== LOGIN LANDING ========== -->
     <div id="landingExtras">
       <div class="top-left-branding">
-        <p class="eyebrow">Offline LAN Portal</p>
-        <h1>Multiversal Evaluation Matrix</h1>
-        <p class="sub-tag">&ldquo;Every great engineer was once just a prototype.&rdquo;</p>
+        <p class="eyebrow">Evaluation System</p>
+        <h1>Makeathon Judging Portal</h1>
+        <p class="sub-tag">"Innovate. Build. Evaluate."</p>
       </div>
 
       <!-- Vertical Side Text -->
-      <div class="side-text side-left">SCANNING <b>MULTIVERSAL</b> ANOMALIES &bull; SECTOR-721 &bull; ENGINEERING PROTOCOL ACTIVE</div>
-      <div class="side-text side-right">CANON EVENT: <b>JUDGING</b> IN PROGRESS &bull; MULTIVERSE SYNC: STABLE</div>
-
-      <!-- Quotes — engineering + spiderman mashups -->
-      <span class="spider-quote q1">&ldquo;With great power comes great responsibility &hellip; to judge fairly.&rdquo;</span>
-      <span class="spider-quote q2">&ldquo;A web is only as strong as its weakest thread &mdash; just like your code.&rdquo;</span>
-      <span class="spider-quote q3">&ldquo;The hardest bugs require the strongest engineers.&rdquo;</span>
-      <span class="spider-quote q4">&ldquo;It&rsquo;s a leap of faith. That&rsquo;s all it is, Miles.&rdquo;</span>
-      <span class="spider-quote q5">&ldquo;Every Spider-Person started with a prototype.&rdquo;</span>
-      <span class="spider-quote q6">&ldquo;Innovation is my superpower. What&rsquo;s yours?&rdquo;</span>
+      <div class="side-text side-left">SCANNING <b>ACTIVE</b> NODES &bull; SECTOR-721 &bull; PROTOCOL ACTIVE</div>
+      <div class="side-text side-right">SESSION <b>VALIDATION</b> IN PROGRESS &bull; SYSTEM SYNC: STABLE</div>
 
       <!-- Corner decorative badges -->
       <div class="corner-badge top-right-badge">
-        <span class="badge-icon">&#x1F578;</span>
-        <span>WEB-001<br><small>Judging Node</small></span>
+        <span class="badge-icon">&#x2124;</span>
+        <span>NODE-001<br><small>Active Session</small></span>
       </div>
       <div class="corner-badge bottom-left-badge">
         <span class="badge-icon">&#x2699;</span>
-        <span>MAKEATHON<br><small>Build &bull; Break &bull; Repeat</small></span>
+        <span>MAKEATHON<br><small>Innovation Hub</small></span>
       </div>
 
       <!-- Decorative circuit lines -->
@@ -52,32 +44,32 @@
     <!-- ========== CENTERED LOGIN ========== -->
     <main class="landing-hero" id="loginWrapper">
       <section id="loginView" class="auth-panel">
-        <h2>Enter the Verse</h2>
+        <h2>System Login</h2>
         <p class="muted" style="text-align:center;margin-bottom:2rem;">Identity Verification Required</p>
         <form id="loginForm">
           <div class="form-group">
             <label for="nameInput">Username</label>
-            <input id="nameInput" name="name" required autocomplete="username" placeholder="Your alias..." />
+            <input id="nameInput" name="name" required autocomplete="username" placeholder="Enter username..." />
           </div>
           <div class="form-group">
             <label for="passwordInput">Password</label>
             <input id="passwordInput" name="password" type="password" required autocomplete="current-password" placeholder="••••••••" />
           </div>
-          <button class="btn btn-primary" type="submit">Login</button>
+          <button class="btn btn-primary" type="submit">Access Portal</button>
         </form>
-        <p class="muted" style="text-align:center;margin-top:1.25rem;font-size:0.7rem;opacity:0.6;">&ldquo;The real superpower is showing up.&rdquo;</p>
+        <p class="muted" style="text-align:center;margin-top:1.25rem;font-size:0.7rem;opacity:0.6;">Secure Access Protocol v2.5</p>
       </section>
     </main>
 
     <!-- ========== DASHBOARD SHELL ========== -->
     <header class="topbar hidden" id="sessionActions">
       <div class="brand">
-        <i data-lucide="hexagon" style="color:var(--primary);width:28px;height:28px;"></i>
-        <h1 id="pageTitle">Spider-Verse Portal</h1>
+        <i data-lucide="shield" style="color:var(--primary);width:28px;height:28px;"></i>
+        <h1 id="pageTitle">Evaluation Dashboard</h1>
       </div>
       <div class="session-actions">
         <span id="userNamePill" class="pill"><i data-lucide="user"></i><span class="val"></span></span>
-        <button id="logoutBtn" class="btn btn-danger" type="button">Leave Verse</button>
+        <button id="logoutBtn" class="btn btn-danger" type="button">Sign Out</button>
       </div>
     </header>
 
@@ -152,10 +144,10 @@
         <!-- Overview Tab -->
         <section id="tab-overview" class="panel admin-tab-panel">
           <div class="section-head">
-            <h2>Multiversal Stats</h2>
-            <button id="refreshDashboardBtn" class="btn btn-secondary" type="button"><i data-lucide="refresh-cw"></i> Sync Reality</button>
+            <h2>System Statistics</h2>
+            <button id="refreshDashboardBtn" class="btn btn-secondary" type="button"><i data-lucide="refresh-cw"></i> Refresh Data</button>
           </div>
-          <p class="muted" style="margin-bottom:1rem;font-style:italic;">&ldquo;Every Spider-Man has a canon event. This is yours.&rdquo;</p>
+          <p class="muted" style="margin-bottom:1rem;font-style:italic;">Comprehensive performance metrics for the active round.</p>
           <div class="stats-grid" id="statsGrid"></div>
           <h3 style="margin-top:2rem;">Top Rankings</h3>
           <div class="table-wrap">
@@ -166,7 +158,7 @@
 
         <!-- Rounds Tab -->
         <section id="tab-rounds" class="panel admin-tab-panel hidden">
-          <h2>Rounds</h2>
+          <h2>Rounds Management</h2>
           <form id="roundCreateForm" class="form-inline">
             <input id="roundCreateName" placeholder="Round name" required />
             <input id="roundCreateSequence" type="number" min="1" placeholder="Seq" required style="width:80px" />
@@ -178,7 +170,7 @@
 
         <!-- Judges Tab -->
         <section id="tab-judges" class="panel admin-tab-panel hidden">
-          <h2>Judges</h2>
+          <h2>Judges Registry</h2>
           <form id="judgeCreateForm" class="form-inline">
             <input id="judgeCreateName" placeholder="Judge name" required />
             <input id="judgeCreatePassword" placeholder="Password" required />
@@ -192,7 +184,6 @@
         <section id="tab-teams" class="panel admin-tab-panel hidden">
           <div class="section-head">
             <h2>Teams Registry</h2>
-            <p class="muted" style="font-style:italic;">&ldquo;The web connects everything &mdash; just like good system architecture.&rdquo;</p>
           </div>
 
           <!-- Search & Filter Bar -->
@@ -289,8 +280,8 @@
 
         <!-- Settings Tab -->
         <section id="tab-settings" class="panel admin-tab-panel hidden">
-          <h2>Submission Deadline</h2>
-          <p class="muted">Judges can edit scores until this deadline.</p>
+          <h2>System Settings</h2>
+          <p class="muted">Configure submission deadlines and system parameters.</p>
           <div class="form-inline">
             <input id="deadlineInput" type="datetime-local" />
             <button id="saveDeadlineBtn" class="btn btn-primary" type="button">Save</button>
@@ -310,7 +301,7 @@
     <div id="teamInfoModal" class="modal-overlay hidden">
       <div class="modal-content" style="max-width: 1000px; width: 95%;">
         <div class="section-head">
-          <h2 id="infoTeamName">Team Info</h2>
+          <h2 id="infoTeamName">Team Data</h2>
           <button class="btn btn-secondary" onclick="document.getElementById('teamInfoModal').classList.add('hidden')">Close</button>
         </div>
         
@@ -332,7 +323,7 @@
           <!-- Right Column: Performance Breakdown -->
           <div style="display: flex; flex-direction: column; gap: 1.5rem;">
             <div>
-              <h3 style="font-size: 1rem; margin-bottom: 0.5rem; color: var(--primary);">Detailed Scores</h3>
+              <h3 style="font-size: 1rem; margin-bottom: 0.5rem; color: var(--primary);">Evaluation Logs</h3>
               <div class="table-wrap" style="max-height: 350px; overflow-y: auto;">
                 <table style="font-size: 0.85rem;">
                   <thead>
@@ -349,7 +340,7 @@
             </div>
 
             <div>
-              <h3 style="font-size: 1rem; margin-bottom: 0.5rem; color: var(--accent);">Judge Remarks</h3>
+              <h3 style="font-size: 1rem; margin-bottom: 0.5rem; color: var(--accent);">Judge Feedback</h3>
               <div id="infoRemarksList" style="max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem;">
               </div>
             </div>
@@ -358,7 +349,7 @@
       </div>
     </div>
   </div>
-  <script src="/static/js/spiderman.js"></script>
+  <script src="/static/js/app.js"></script>
   <script>lucide.createIcons();</script>
 </body>
 </html>
