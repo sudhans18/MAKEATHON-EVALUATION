@@ -25,9 +25,46 @@ def seed():
         with transaction():
             users = [
                 ("admin", "admin", "admin123"),
-                ("judge_1", "judge", "judge123"),
-                ("judge_2", "judge", "judge123"),
-                ("judge_3", "judge", "judge123"),
+                # Round 1 Judges
+                ("Radhika Mam",       "judge", "Radhika@26"),
+                ("Pattu Mam",         "judge", "Pattu@26"),
+                ("Sarala Mam",        "judge", "Sarala@26"),
+                ("Menaka Mam",        "judge", "Menaka@26"),
+                ("Srividhiya Mam",    "judge", "Srividhiya@26"),
+                ("Varnika Mam",       "judge", "Varnika@26"),
+                ("Venkatesh Sir",     "judge", "Venkatesh@26"),
+                ("Ramya Mam",         "judge", "Ramya@26"),
+                ("Mehzabeen Mam",     "judge", "Mehzabeen@26"),
+                ("Senthil Rajan Sir", "judge", "SenthilRajan@26"),
+                ("Gomatheeswari Mam", "judge", "Gomatheeswari@26"),
+                ("Stella Mary Mam",   "judge", "StellaMary@26"),
+                ("Mary Cynthia Mam",  "judge", "MaryCynthia@26"),
+                ("Athappan Sir",      "judge", "Athappan@26"),
+                ("Kumaratharan Sir",  "judge", "Kumaratharan@26"),
+                ("Varadharajan Sir",  "judge", "Varadharajan@26"),
+                ("SPS Sir",           "judge", "SPS@26"),
+                ("Bindhu Mam",        "judge", "Bindhu@26"),
+                # Additional Judges
+                ("Kiran Sekar S",       "judge", "Kiran@26"),
+                ("Robinkumar J",        "judge", "Robinkumar@26"),
+                ("Anish Krishnan",      "judge", "Anish@26"),
+                ("Hari Prasad Prakash", "judge", "HariPrasad@26"),
+                ("Maanas Reddy",        "judge", "Maanas@26"),
+                ("Snehalatha",          "judge", "Snehalatha@26"),
+                ("Muthukumaran Sir",    "judge", "Muthukumaran@26"),
+                ("Silambarasan Sir",    "judge", "Silambarasan@26"),
+                ("Balaji Sir",          "judge", "Balaji@26"),
+                ("Mary Cyndia Mam",     "judge", "MaryCyndia@26"),
+                ("Kousalya Mam",        "judge", "Kousalya@26"),
+                ("Avinash P",           "judge", "Avinash@26"),
+                ("Sreeja R",            "judge", "Sreeja@26"),
+                ("Harisudhan",          "judge", "Harisudhan@26"),
+                ("Kavitha S",           "judge", "Kavitha@26"),
+                ("Vivek Ravi",          "judge", "Vivek@26"),
+                ("Jeevakumar A",        "judge", "Jeevakumar@26"),
+                ("Shubam Deepa",        "judge", "Shubam@26"),
+                ("I K Mahith",          "judge", "Mahith@26"),
+                ("Ganeshan",            "judge", "Ganeshan@26"),
             ]
             for name, role, plain_password in users:
                 existing = db.execute(
@@ -74,7 +111,6 @@ def seed():
                 ("ELITE FORCE", "SW0302 | Software - Local-Language Grievance Auto-Routing for Municipalities", "\u2022 NLP and speech-processing pipeline handling code-mixed Indian languages (Tamil+English, Hindi+English) and dialects\n\u2022 Accept multi-modal inputs (text, voice notes, images) and convert to structured complaint representation (category, location, urgency)\n\u2022 Auto-route complaints to appropriate department/ward and priority level based on content and historical patterns\n\u2022 Simple dashboard for officials to track volumes, resolution status, and recurring issues\n\u2022 Feedback mechanisms (user rating, reopened complaints) to improve classification and routing accuracy over time", "SW"),
                 ("KNULL", "SW0302 | Software - Local-Language Grievance Auto-Routing for Municipalities", "\u2022 NLP and speech-processing pipeline handling code-mixed Indian languages (Tamil+English, Hindi+English) and dialects\n\u2022 Accept multi-modal inputs (text, voice notes, images) and convert to structured complaint representation (category, location, urgency)\n\u2022 Auto-route complaints to appropriate department/ward and priority level based on content and historical patterns\n\u2022 Simple dashboard for officials to track volumes, resolution status, and recurring issues\n\u2022 Feedback mechanisms (user rating, reopened complaints) to improve classification and routing accuracy over time", "SW"),
                 ("CELESTIALS", "IS0201 | Walmart - AI-Based Garment Return Reduction System", "\u2022 Develop a predictive system that analyzes historical return data, user behavior, and product attributes to estimate return probability and generate a confidence score during purchase\n\u2022 Build a personalized size and fit recommendation engine using user profiles, past purchases, and brand-specific variations, optionally enhanced with computer vision for virtual try-on or body measurement\n\u2022 Implement real-time decision support at checkout including risk alerts, fit suggestions, and product insights derived from metadata such as fabric, reviews, and fit type\n\u2022 Create retailer dashboards with analytics on high-return products, customer patterns, and feedback loops to continuously improve model accuracy and optimize inventory decisions", "SW"),
-                ("Yakuza", "IS0801 | ApexFlow Technologies - The Air Gapped Optical Data Bridge", "\u2022 Hardware \u2014 Create a transmitter using a fast-blinking LED light and a receiver using a Light Dependent Resistor (LDR) or a photodiode\n\u2022 Software \u2014 Create a script that can convert a text document or image into binary code, transmit it as a blinking light, and a second script that can receive this light and translate it back into the original document/image on a completely disconnected computer", "HW"),
                 ("ECLIPSE", "IS0301 | Solvitae - Design of a Plug-and-Play Smart Vehicle Monitoring and Tracking System", "\u2022 Enable accurate real-time and offline GPS tracking with complete trip logging from source to destination\n\u2022 Record and analyze vehicle idle time, rest duration, and movement behavior\n\u2022 Support geofencing and area-based tracking to monitor vehicle movement within defined zones\n\u2022 Detect and alert over-speeding conditions to improve driving discipline\n\u2022 Integrate driver drowsiness detection mechanisms using sensors or vision-based approaches\n\u2022 Utilize non-GSM communication technologies such as LoRa or similar methods for data transmission\n\u2022 Incorporate local data storage to ensure uninterrupted logging during connectivity loss\n\u2022 Be designed as a compact plug-and-play hardware module compatible with different vehicle types\n\u2022 Provide a user interface/dashboard for visualizing trip history, alerts, and analytics", "HW"),
                 ("Apex Innovators", "IS0902 | Upcheck Technologies - Energy-Efficient Sensor Network Design for Extended Field Deployments", "\u2022 Balance the trade-off between sensing frequency, data resolution, and energy consumption\n\u2022 Design adaptive duty-cycling strategies that adjust system behavior based on remaining energy reserves\n\u2022 Select or propose low-power communication protocols suited to constrained field environments\n\u2022 Handle energy variability introduced by renewable sources such as solar or kinetic harvesters\n\u2022 Maintain system responsiveness for time-sensitive readings even under low-energy conditions", "HW"),
                 ("DECADES", "IS0902 | Upcheck Technologies - Energy-Efficient Sensor Network Design for Extended Field Deployments", "\u2022 Balance the trade-off between sensing frequency, data resolution, and energy consumption\n\u2022 Design adaptive duty-cycling strategies that adjust system behavior based on remaining energy reserves\n\u2022 Select or propose low-power communication protocols suited to constrained field environments\n\u2022 Handle energy variability introduced by renewable sources such as solar or kinetic harvesters\n\u2022 Maintain system responsiveness for time-sensitive readings even under low-energy conditions", "HW"),
@@ -243,9 +279,9 @@ def seed():
             )
 
     print("Sample data seeded.")
-    print("Admin login: admin / admin123")
-    print("Judge login: judge_1 / judge123")
-    print("Assignments: manual via Admin panel (AUTO_ASSIGN_ALL=1 to pre-assign all).")
+    print("Admin login:  admin / admin123")
+    print("Judge logins: <Name> / <FirstName>@26  (e.g. 'Radhika Mam' / 'Radhika@26')")
+    print("Assignments:  manual via Admin panel (AUTO_ASSIGN_ALL=1 to pre-assign all).")
 
 
 if __name__ == "__main__":

@@ -93,7 +93,12 @@
         <section id="evaluationPanel" class="panel hidden" style="margin-top:2rem;">
           <div class="section-head">
             <h2 id="evalTitle">Evaluation</h2>
-            <span id="evalStatusBadge" class="status-badge"></span>
+            <div style="display:flex;gap:0.75rem;align-items:center;">
+              <button id="priorFeedbackBtn" class="btn btn-secondary hidden" type="button">
+                <i data-lucide="message-square" style="width:15px;"></i> Prior Feedback
+              </button>
+              <span id="evalStatusBadge" class="status-badge"></span>
+            </div>
           </div>
           <p id="deadlineText" class="muted"></p>
           <div class="team-content">
@@ -266,7 +271,7 @@
           <div class="section-head">
             <h2>Rankings</h2>
             <div class="action-group">
-              <select id="rankingRoundSelect" style="min-width:140px;"></select>
+              <select id="rankingRoundSelect" style="min-width:180px;"></select>
               <select id="rankingCategorySelect" style="min-width:120px;">
                 <option value="">All</option><option value="HW">Hardware</option><option value="SW">Software</option>
               </select>
@@ -274,7 +279,11 @@
               <button id="exportRankingsBtn" class="btn btn-secondary" type="button">Export CSV</button>
             </div>
           </div>
-          <div class="table-wrap"><table><thead><tr><th>Rank</th><th>Team</th><th>Category</th><th id="rankColAvgTotal">Avg Score</th><th>Judges</th><th>Override</th></tr></thead>
+          <p class="muted" style="font-size:0.78rem;margin-bottom:0.75rem;">
+            <strong>Per-round leaderboard</strong> — average of all judges&rsquo; scores for that round &nbsp;|&nbsp;
+            <strong>Overall weighted</strong> — Round 1 &times; 20% &bull; Round 2 &times; 30% &bull; Round 3 &times; 50%
+          </p>
+          <div class="table-wrap"><table><thead><tr><th>Rank</th><th>Team</th><th>Category</th><th id="rankColAvgTotal">Avg Score</th><th>Avg %</th><th>Judges</th><th>Override</th></tr></thead>
           <tbody id="rankingsTableBody"></tbody></table></div>
         </section>
 
@@ -298,6 +307,21 @@
         <div id="modalRemarksList"></div>
       </div>
     </div>
+
+    <!-- Prior Feedback Modal (for judges) -->
+    <div id="priorFeedbackModal" class="modal-overlay hidden">
+      <div class="modal-content" style="max-width:700px;width:95%;">
+        <div class="section-head">
+          <h2 id="priorFeedbackTitle">Previous Round Feedback</h2>
+          <button class="btn btn-secondary" onclick="document.getElementById('priorFeedbackModal').classList.add('hidden')">Close</button>
+        </div>
+        <p class="muted" style="font-size:0.82rem;margin-bottom:1rem;">
+          Feedback left by evaluators in previous rounds. Use this to build on prior observations.
+        </p>
+        <div id="priorFeedbackList" style="display:flex;flex-direction:column;gap:1rem;max-height:60vh;overflow-y:auto;"></div>
+      </div>
+    </div>
+
     <div id="teamInfoModal" class="modal-overlay hidden">
       <div class="modal-content" style="max-width: 1000px; width: 95%;">
         <div class="section-head">

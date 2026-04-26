@@ -99,6 +99,10 @@
     remarksModal: document.getElementById("remarksModal"),
     modalRemarksList: document.getElementById("modalRemarksList"),
     modalTeamName: document.getElementById("modalTeamName"),
+    priorFeedbackBtn: document.getElementById("priorFeedbackBtn"),
+    priorFeedbackModal: document.getElementById("priorFeedbackModal"),
+    priorFeedbackTitle: document.getElementById("priorFeedbackTitle"),
+    priorFeedbackList: document.getElementById("priorFeedbackList"),
     teamInfoModal: document.getElementById("teamInfoModal"),
     infoTeamName: document.getElementById("infoTeamName"),
     infoPsId: document.getElementById("infoPsId"),
@@ -242,6 +246,15 @@
     els.judgeRoundSelect.innerHTML = options;
   }
 
+  function populateRankingRoundSelect() {
+    // Build: one option per round + Overall at the end
+    var opts = state.rounds.map(function (r) {
+      return "<option value='" + r.id + "'>" + escapeHtml(r.name) + "</option>";
+    }).join("");
+    opts += "<option value='overall'>Overall (Weighted)</option>";
+    els.rankingRoundSelect.innerHTML = opts;
+  }
+
   async function loadRounds() {
     state.rounds = await api("/api/rounds");
     if (!state.rounds.length) return;
@@ -252,6 +265,7 @@
     }
     if (!stillExists) state.activeRoundId = state.rounds[0].id;
     renderRoundSelectors();
+    populateRankingRoundSelect();
   }
 
   async function persistActiveRound(roundId) {
@@ -347,6 +361,11 @@
     state.judge.dirty = false;
     setJudgeDisabled(!evaluation.editable);
     setSaveState(evaluation.editable ? "No unsaved changes." : "Editing locked.");
+
+    // Show "Prior Feedback" button only for rounds after Round 1
+    var roundSeq = evaluation.round ? Number(evaluation.round.sequence) : 1;
+    els.priorFeedbackBtn.classList.toggle("hidden", roundSeq <= 1);
+
     if (window.lucide) window.lucide.createIcons();
   }
 
@@ -559,20 +578,20 @@
   function renderRankings() {
     var isOverall = els.rankingRoundSelect.value === "overall";
     els.rankColAvgTotal.classList.toggle("hidden", isOverall);
-    
+
     els.rankingsTableBody.innerHTML = state.admin.rankings.map(function (r) {
       var override = r.override_rank == null ? "" : r.override_rank;
       var reason = r.override_reason || "";
       var category = escapeHtml(r.category || "SW");
-      
+
       var scoreTd = isOverall ? "" : ("<td>" + r.avg_total_score + "</td>");
-      
-      return "<tr data-team-id='" + r.team_id + "'><td>" + r.rank + "</td><td>" + escapeHtml(r.team_name) + "</td><td>" + category + "</td>" + scoreTd + "<td>" + r.avg_percentage + "%</td><td>" +
+
+      return "<tr data-team-id='" + r.team_id + "'><td>" + r.rank + "</td><td>" + escapeHtml(r.team_name) + "</td><td>" + category + "</td>" + scoreTd + "<td><strong>" + r.avg_percentage + "%</strong></td><td>" + (r.submitted_judges || 0) + "</td><td>" +
         "<div class='form-inline'><input data-override-rank value='" + override + "' placeholder='Rank' style='max-width:90px' " + (isOverall ? "disabled" : "") + " />" +
         "<input data-override-reason value='" + escapeHtml(reason) + "' placeholder='Reason' " + (isOverall ? "disabled" : "") + " />" +
         "<button class='btn btn-secondary' data-action='save-override' type='button' " + (isOverall ? "disabled" : "") + ">Save</button>" +
         "<button class='btn btn-danger' data-action='clear-override' type='button' " + (isOverall ? "disabled" : "") + ">Clear</button></div></td></tr>";
-    }).join("") || "<tr><td colspan='6'>No rankings available.</td></tr>";
+    }).join("") || "<tr><td colspan='7'>No rankings available.</td></tr>";
     if (window.lucide) window.lucide.createIcons();
   }
 
@@ -633,12 +652,11 @@
   }
 
   async function loadRankings() {
-
-    var rid = els.rankingRoundSelect.value === "active" ? state.activeRoundId : "overall";
+    var rid = els.rankingRoundSelect.value || "overall";
     var cat = els.rankingCategorySelect.value;
     var query = "?round_id=" + rid;
-    if (cat !== "All") query += "&category=" + cat;
-    
+    if (cat && cat !== "All") query += "&category=" + cat;
+
     var payload = await api("/api/admin/rankings" + query);
     state.admin.rankings = payload.rows || [];
     els.exportRankingsBtn.href = "/api/admin/export/csv" + query;
@@ -764,6 +782,44 @@
     els.saveDraftBtn.addEventListener("click", function () { saveJudgeDraft(false); });
     els.retrySaveBtn.addEventListener("click", function () { saveJudgeDraft(false); });
     els.submitBtn.addEventListener("click", submitJudgeFinal);
+
+    // Prior feedback button
+    els.priorFeedbackBtn.addEventListener("click", async function () {
+      var teamId = state.judge.currentTeamId;
+      var teamName = state.judge.evaluation ? state.judge.evaluation.team.name : "Team";
+      if (!teamId) return;
+      els.priorFeedbackTitle.textContent = "Previous Round Feedback — " + teamName;
+      els.priorFeedbackList.innerHTML = "<p class='muted' style='text-align:center;padding:1.5rem;'>Loading...</p>";
+      els.priorFeedbackModal.classList.remove("hidden");
+      try {
+        var remarks = await api("/api/judge/teams/" + teamId + "/prior-remarks" + roundQuery());
+        if (!remarks.length) {
+          els.priorFeedbackList.innerHTML = "<p class='muted' style='text-align:center;padding:1.5rem;'>No prior feedback recorded for this team yet.</p>";
+          return;
+        }
+        // Group by round
+        var byRound = {};
+        remarks.forEach(function (r) {
+          if (!byRound[r.round_name]) byRound[r.round_name] = [];
+          byRound[r.round_name].push(r.remarks);
+        });
+        els.priorFeedbackList.innerHTML = Object.keys(byRound).map(function (roundName) {
+          var items = byRound[roundName].map(function (text, idx) {
+            return "<div class='remark-card' style='margin-bottom:0.5rem;'>" +
+              "<div class='meta'><span class='round'>Evaluator " + (idx + 1) + "</span></div>" +
+              "<p class='text'>" + escapeHtml(text) + "</p>" +
+              "</div>";
+          }).join("");
+          return "<div style='margin-bottom:1.25rem;'>" +
+            "<h3 style='font-size:0.9rem;color:var(--primary);margin-bottom:0.5rem;padding-bottom:0.35rem;border-bottom:1px solid var(--border);'>" + escapeHtml(roundName) + "</h3>" +
+            items +
+            "</div>";
+        }).join("");
+      } catch (err) {
+        els.priorFeedbackList.innerHTML = "<p class='muted' style='text-align:center;padding:1rem;'>Failed to load feedback: " + escapeHtml(err.message) + "</p>";
+      }
+    });
+
     window.setInterval(function () {
       if (state.judge.pendingRetry && navigator.onLine) saveJudgeDraft(false);
     }, 8000);

@@ -1,6 +1,10 @@
 import csv
 import io
+import logging
+import os
 import sqlite3
+import threading
+from collections import defaultdict
 from datetime import datetime
 from functools import wraps
 
@@ -9,6 +13,50 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from config import Config
 from db import close_db, get_db, init_db, transaction
+
+
+
+def _start_backup_worker(app):
+    """Spawn a daemon thread that copies the live DB to backups/ every N seconds."""
+    if os.environ.get("DISABLE_DB_BACKUP_WORKER") == "1":
+        return
+
+    db_path = app.config["DATABASE_PATH"]
+    backup_dir = app.config["DB_BACKUP_DIR"]
+    interval = app.config["DB_BACKUP_INTERVAL_SECONDS"]
+    keep = int(os.environ.get("DB_BACKUP_KEEP", "20"))  # keep last N backups
+
+    os.makedirs(backup_dir, exist_ok=True)
+    log = logging.getLogger("db_backup")
+
+    def _run():
+        log.info("DB backup worker started — interval=%ds dir=%s", interval, backup_dir)
+        while True:
+            threading.Event().wait(interval)   # sleep N seconds
+            try:
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                dest = os.path.join(backup_dir, f"judging_{ts}.db")
+                # Use SQLite's online backup API — safe even while DB is being written
+                src = sqlite3.connect(db_path)
+                dst = sqlite3.connect(dest)
+                with dst:
+                    src.backup(dst)
+                dst.close()
+                src.close()
+                log.info("DB backed up → %s", dest)
+
+                # Prune old backups, keeping the most recent `keep` files
+                backups = sorted(
+                    [f for f in os.listdir(backup_dir) if f.endswith(".db")]
+                )
+                for old in backups[:-keep]:
+                    os.remove(os.path.join(backup_dir, old))
+                    log.info("Pruned old backup: %s", old)
+            except Exception as exc:
+                log.error("DB backup failed: %s", exc)
+
+    t = threading.Thread(target=_run, name="db-backup", daemon=True)
+    t.start()
 
 
 def create_app():
@@ -22,6 +70,7 @@ def create_app():
         _ensure_default_round(get_db())
 
     register_routes(app)
+    _start_backup_worker(app)
     return app
 
 
@@ -44,11 +93,15 @@ def _has_team_column(db, column_name):
 
 
 def _team_ps_id_expr(db, alias="t"):
-    return f"{alias}.ps_id" if _has_team_column(db, "ps_id") else "''"
+    if not _has_team_column(db, "ps_id"):
+        return "''"
+    return f"{alias}.ps_id" if alias else "ps_id"
 
 
 def _team_category_expr(db, alias="t"):
-    return f"{alias}.category" if _has_team_column(db, "category") else "'SW'"
+    if not _has_team_column(db, "category"):
+        return "'SW'"
+    return f"{alias}.category" if alias else "category"
 
 
 def _list_rounds(db):
@@ -474,50 +527,92 @@ def _build_rankings(db, round_id, category=None):
             tuple(query_params),
         ).fetchall()
     else:
-        # Overall rankings (Aggregate across all rounds)
-        query_params = []
-        if category in ["HW", "SW"] and _has_team_column(db, "category"):
-            query_params.append(category)
+        # Overall weighted rankings: R1=20%, R2=30%, R3=50%
+        # Per round: average across all judges who submitted → % of max
+        WEIGHTS = {1: 0.20, 2: 0.30, 3: 0.50}
 
-        rows = db.execute(
-            f"""
-            WITH round_percentages AS (
-                SELECT
-                    t.id AS team_id,
-                    r.id AS round_id,
-                    SUM(fs.score) * 100.0 / (SELECT SUM(max_score) FROM round_criteria WHERE round_id = r.id) AS percentage
-                FROM teams t
-                JOIN round_final_scores fs ON fs.team_id = t.id
-                JOIN rounds r ON r.id = fs.round_id
-                JOIN round_final_submissions sub 
-                    ON sub.team_id = fs.team_id 
-                    AND sub.judge_id = fs.judge_id 
-                    AND sub.round_id = fs.round_id
-                GROUP BY t.id, r.id, fs.judge_id
-            ),
-            team_round_avgs AS (
-                SELECT team_id, round_id, AVG(percentage) as round_avg
-                FROM round_percentages
-                GROUP BY team_id, round_id
-            )
-            SELECT
-                t.id AS team_id,
-                t.name AS team_name,
-                {team_category_expr} AS category,
-                0 AS avg_total_score,
-                ROUND(AVG(tra.round_avg), 4) AS avg_percentage,
-                0 AS secondary_score,
-                (SELECT COUNT(DISTINCT judge_id) FROM round_final_submissions WHERE team_id = t.id) AS submitted_judges,
-                NULL AS override_rank,
-                NULL AS override_reason
-            FROM teams t
-            LEFT JOIN team_round_avgs tra ON tra.team_id = t.id
-            WHERE 1=1 {category_filter}
-            GROUP BY t.id, t.name
-            ORDER BY avg_percentage DESC, team_name ASC
-            """,
-            tuple(query_params),
+        # Fetch all rounds and assign weights by sequence
+        all_rounds = db.execute(
+            "SELECT id, sequence FROM rounds ORDER BY sequence, id"
         ).fetchall()
+        assigned = {r["id"]: WEIGHTS.get(int(r["sequence"])) for r in all_rounds}
+        unassigned_ids = [r["id"] for r in all_rounds if assigned[r["id"]] is None]
+        used_weight = sum(w for w in assigned.values() if w is not None)
+        remaining = max(0.0, 1.0 - used_weight)
+        fallback = (remaining / len(unassigned_ids)) if unassigned_ids else 0.0
+        for rid in unassigned_ids:
+            assigned[rid] = fallback
+
+        cat_filter_sql = ""
+        cat_params = []
+        if category in ["HW", "SW"] and _has_team_column(db, "category"):
+            cat_filter_sql = f"AND {team_category_expr} = ?"
+            cat_params = [category]
+
+        teams_raw = db.execute(
+            f"""
+            SELECT t.id AS team_id, t.name AS team_name, {team_category_expr} AS category
+            FROM teams t
+            WHERE 1=1 {cat_filter_sql}
+            ORDER BY t.name
+            """,
+            tuple(cat_params),
+        ).fetchall()
+
+        # Per-team per-round: avg judge % score
+        round_avgs_raw = db.execute(
+            """
+            WITH judge_totals AS (
+                SELECT
+                    fs.team_id,
+                    fs.round_id,
+                    fs.judge_id,
+                    SUM(fs.score) * 100.0 /
+                        NULLIF((SELECT SUM(max_score) FROM round_criteria
+                                WHERE round_id = fs.round_id), 0) AS pct
+                FROM round_final_scores fs
+                JOIN round_final_submissions sub
+                    ON sub.judge_id = fs.judge_id
+                    AND sub.team_id = fs.team_id
+                    AND sub.round_id = fs.round_id
+                GROUP BY fs.team_id, fs.round_id, fs.judge_id
+            )
+            SELECT team_id, round_id, AVG(pct) AS round_avg_pct
+            FROM judge_totals
+            GROUP BY team_id, round_id
+            """
+        ).fetchall()
+
+        team_round_map = defaultdict(dict)
+        for row in round_avgs_raw:
+            team_round_map[row["team_id"]][row["round_id"]] = row["round_avg_pct"] or 0.0
+
+        submitted_counts = {
+            row["team_id"]: row["cnt"]
+            for row in db.execute(
+                "SELECT team_id, COUNT(DISTINCT judge_id) AS cnt "
+                "FROM round_final_submissions GROUP BY team_id"
+            ).fetchall()
+        }
+
+        rows = []
+        for t in teams_raw:
+            tid = t["team_id"]
+            weighted_pct = sum(
+                assigned[rid] * team_round_map[tid].get(rid, 0.0)
+                for rid in assigned
+            )
+            rows.append({
+                "team_id": tid,
+                "team_name": t["team_name"],
+                "category": t["category"],
+                "avg_total_score": 0,
+                "avg_percentage": round(weighted_pct, 4),
+                "secondary_score": 0,
+                "submitted_judges": submitted_counts.get(tid, 0),
+                "override_rank": None,
+                "override_reason": None,
+            })
 
     auto_sorted = sorted(
         rows,
@@ -933,8 +1028,8 @@ def register_routes(app):
     @role_required("admin")
     def team_details(_user, team_id):
         db = get_db()
-        ps_id_expr = _team_ps_id_expr(db)
-        category_expr = _team_category_expr(db)
+        ps_id_expr = _team_ps_id_expr(db, alias="")
+        category_expr = _team_category_expr(db, alias="")
         team = db.execute(
             f"""
             SELECT id, name, {ps_id_expr} AS ps_id, {category_expr} AS category,
@@ -1625,6 +1720,37 @@ def register_routes(app):
                 "round_id": rid,
             }
         )
+
+    @app.get("/api/judge/teams/<int:team_id>/prior-remarks")
+    @role_required("judge")
+    def prior_remarks(user, team_id):
+        """Return finalized remarks for this team from all rounds prior to the current one.
+        Round 1 always returns []. Judge names are hidden from evaluators."""
+        db = get_db()
+        rid, round_row, err = _resolve_round_id(db, required=True)
+        if err:
+            return err
+        if not _require_round_assignment(db, user["id"], team_id, rid):
+            return jsonify({"error": "Team not assigned to this judge for this round"}), 403
+
+        current_seq = round_row["sequence"] if round_row else 999
+        rows = db.execute(
+            """
+            SELECT
+                r.name  AS round_name,
+                r.sequence AS round_sequence,
+                rm.text AS remarks
+            FROM round_final_remarks rm
+            JOIN rounds r ON r.id = rm.round_id
+            WHERE rm.team_id = ?
+              AND r.sequence < ?
+              AND (rm.text IS NOT NULL AND TRIM(rm.text) != '')
+            ORDER BY r.sequence
+            """,
+            (team_id, current_seq),
+        ).fetchall()
+
+        return jsonify([dict(row) for row in rows])
 
 
 app = create_app()
