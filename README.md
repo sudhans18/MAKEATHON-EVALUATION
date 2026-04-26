@@ -16,8 +16,10 @@ static/
 - Flask + SQLite (WAL mode enabled for concurrent writes).
 - Session-based authentication with role-based access control (`admin`, `judge`).
 - Admin APIs:
+  - Manage rounds (Round 1 / Round 2 / Round 3, etc.).
   - Manage judges, teams, criteria.
-  - Manage judge-team assignments.
+  - Manage criteria per round.
+  - Manage judge-team assignments per round.
   - View all scores, dashboard metrics, rankings.
   - Manual ranking override endpoint.
   - Submission deadline control.
@@ -91,6 +93,9 @@ Server binds to `0.0.0.0:5000`.
 - `PUT|DELETE /api/admin/teams/<team_id>`
 - `GET|POST /api/admin/criteria`
 - `PUT|DELETE /api/admin/criteria/<criterion_id>`
+- `GET|POST /api/admin/rounds`
+- `PUT|DELETE /api/admin/rounds/<round_id>`
+- `GET /api/rounds`
 - `GET /api/admin/assignments`
 - `PUT /api/admin/assignments/<judge_id>`
 - `GET /api/admin/scores`
@@ -100,6 +105,8 @@ Server binds to `0.0.0.0:5000`.
 - `DELETE /api/admin/rankings/override/<team_id>`
 - `GET /api/admin/settings/submission-deadline`
 - `PUT /api/admin/settings/submission-deadline`
+- `GET /api/admin/settings/active-round`
+- `PUT /api/admin/settings/active-round`
 - `GET /api/admin/export/csv`
 - `GET /api/judge/teams`
 - `GET /api/judge/teams/<team_id>/evaluation`
@@ -107,9 +114,10 @@ Server binds to `0.0.0.0:5000`.
 - `POST /api/judge/teams/<team_id>/submit`
 - `GET /api/health`
 
+Most admin/judge round-aware endpoints accept `round_id` via querystring and/or JSON body.
+
 ## Run Tests
 
 ```bash
 python -m unittest discover -s backend/tests -p "test_*.py" -v
 ```
-

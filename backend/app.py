@@ -1,85 +1,25 @@
 import csv
 import io
-import logging
-import os
 import sqlite3
-import threading
-import time
 from datetime import datetime
 from functools import wraps
-from logging.handlers import RotatingFileHandler
 
-from flask import Flask, jsonify, request, session, send_file, render_template
+from flask import Flask, jsonify, render_template, request, send_file, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from config import Config
-from db import close_db, get_db, init_connection_pool, init_db, transaction
-
-
-def _ensure_parent(path):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-
-
-def _configure_logging(app):
-    os.makedirs(app.config["LOG_DIR"], exist_ok=True)
-    log_path = os.path.join(app.config["LOG_DIR"], "server.log")
-    file_handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5)
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
-    )
-    if not any(isinstance(h, RotatingFileHandler) for h in app.logger.handlers):
-        app.logger.addHandler(file_handler)
-    app.logger.setLevel(logging.INFO)
-    app.logger.propagate = False
-
-
-def _backup_database_file(db_path, backup_dir):
-    os.makedirs(backup_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = os.path.join(backup_dir, f"backup_{timestamp}.db")
-    src = sqlite3.connect(db_path, timeout=30.0)
-    dest = sqlite3.connect(backup_path, timeout=30.0)
-    try:
-        src.backup(dest)
-    finally:
-        dest.close()
-        src.close()
-    return backup_path
-
-
-def _start_backup_worker(app):
-    interval = max(30, int(app.config["DB_BACKUP_INTERVAL_SECONDS"]))
-    db_path = app.config["DATABASE_PATH"]
-    backup_dir = app.config["DB_BACKUP_DIR"]
-
-    def _loop():
-        while True:
-            time.sleep(interval)
-            try:
-                with app.app_context():
-                    path = _backup_database_file(db_path, backup_dir)
-                    app.logger.info("Automatic DB backup created: %s", path)
-            except Exception:
-                app.logger.exception("Automatic DB backup failed")
-
-    worker = threading.Thread(target=_loop, name="db-backup-worker", daemon=True)
-    worker.start()
+from db import close_db, get_db, init_db, transaction
 
 
 def create_app():
     app = Flask(__name__, template_folder="../templates", static_folder="../static")
     app.config.from_object(Config)
-    _ensure_parent(app.config["DATABASE_PATH"])
-    _configure_logging(app)
-    init_connection_pool(app)
     app.teardown_appcontext(close_db)
 
     with app.app_context():
         init_db()
+        _ensure_default_round(get_db())
 
-    if os.environ.get("DISABLE_DB_BACKUP_WORKER", "0") != "1":
-        _start_backup_worker(app)
     register_routes(app)
     return app
 
@@ -91,6 +31,70 @@ def _parse_iso_datetime(value):
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _list_rounds(db):
+    return db.execute(
+        "SELECT id, name, sequence FROM rounds ORDER BY sequence, id"
+    ).fetchall()
+
+
+def _ensure_default_round(db):
+    existing = db.execute("SELECT id FROM rounds LIMIT 1").fetchone()
+    if not existing:
+        db.execute(
+            "INSERT INTO rounds (name, sequence) VALUES ('Round 1', 1)"
+        )
+        db.commit()
+    first_round = db.execute(
+        "SELECT id FROM rounds ORDER BY sequence, id LIMIT 1"
+    ).fetchone()
+    if first_round:
+        db.execute(
+            """
+            INSERT INTO settings (key, value)
+            VALUES ('active_round_id', ?)
+            ON CONFLICT(key) DO NOTHING
+            """,
+            (str(first_round["id"]),),
+        )
+        db.commit()
+
+
+def _resolve_round_id(db, requested=None, required=True):
+    candidate = requested
+    if candidate is None:
+        candidate = request.args.get("round_id")
+    if candidate is None and request.is_json:
+        payload = request.get_json(silent=True) or {}
+        candidate = payload.get("round_id")
+    if candidate is None:
+        row = db.execute(
+            "SELECT value FROM settings WHERE key='active_round_id' LIMIT 1"
+        ).fetchone()
+        if row:
+            candidate = row["value"]
+    if candidate is None:
+        row = db.execute(
+            "SELECT id FROM rounds ORDER BY sequence, id LIMIT 1"
+        ).fetchone()
+        if row:
+            candidate = row["id"]
+    if candidate is None:
+        if required:
+            return None, jsonify({"error": "No rounds configured"}), 400
+        return None, None, None
+    try:
+        round_id = int(candidate)
+    except (TypeError, ValueError):
+        return None, jsonify({"error": "Invalid round_id"}), 400
+    round_row = db.execute(
+        "SELECT id, name, sequence FROM rounds WHERE id = ? LIMIT 1",
+        (round_id,),
+    ).fetchone()
+    if not round_row:
+        return None, jsonify({"error": "Round not found"}), 404
+    return round_id, round_row, None
 
 
 def _get_submission_deadline(db):
@@ -144,21 +148,29 @@ def role_required(*roles):
     return decorator
 
 
-def _require_assignment(db, judge_id, team_id):
+def _require_round_assignment(db, judge_id, team_id, round_id):
     row = db.execute(
         """
         SELECT 1
-        FROM assignments
-        WHERE judge_id = ? AND team_id = ?
+        FROM round_assignments
+        WHERE judge_id = ? AND team_id = ? AND round_id = ?
         LIMIT 1
         """,
-        (judge_id, team_id),
+        (judge_id, team_id, round_id),
     ).fetchone()
     return bool(row)
 
 
-def _criteria_map(db):
-    criteria = db.execute("SELECT id, name, max_score FROM criteria ORDER BY id").fetchall()
+def _criteria_map(db, round_id):
+    criteria = db.execute(
+        """
+        SELECT id, round_id, name, max_score
+        FROM round_criteria
+        WHERE round_id = ?
+        ORDER BY id
+        """,
+        (round_id,),
+    ).fetchall()
     return {str(c["id"]): c for c in criteria}, criteria
 
 
@@ -187,22 +199,21 @@ def _validate_score_payload(scores_payload, criteria_lookup):
     return errors, cleaned
 
 
-def _save_draft_evaluation(db, judge_id, team_id, scores_payload, remarks_text):
-    criteria_lookup, _ = _criteria_map(db)
+def _save_round_draft_evaluation(db, judge_id, team_id, round_id, scores_payload, remarks_text):
+    criteria_lookup, _ = _criteria_map(db, round_id)
     errors, cleaned_scores = _validate_score_payload(scores_payload, criteria_lookup)
     if errors:
         return False, errors
-
     try:
         with transaction():
             already_submitted = db.execute(
                 """
                 SELECT id
-                FROM final_submissions
-                WHERE judge_id = ? AND team_id = ?
+                FROM round_final_submissions
+                WHERE judge_id = ? AND team_id = ? AND round_id = ?
                 LIMIT 1
                 """,
-                (judge_id, team_id),
+                (judge_id, team_id, round_id),
             ).fetchone()
             if already_submitted:
                 raise ValueError("Final submission already locked and immutable")
@@ -211,31 +222,33 @@ def _save_draft_evaluation(db, judge_id, team_id, scores_payload, remarks_text):
                 if score_value is None:
                     db.execute(
                         """
-                        DELETE FROM draft_scores
-                        WHERE judge_id = ? AND team_id = ? AND criterion_id = ?
+                        DELETE FROM round_draft_scores
+                        WHERE judge_id = ? AND team_id = ? AND round_id = ? AND criterion_id = ?
                         """,
-                        (judge_id, team_id, int(criterion_id)),
+                        (judge_id, team_id, round_id, int(criterion_id)),
                     )
                     continue
                 db.execute(
                     """
-                    INSERT INTO draft_scores (judge_id, team_id, criterion_id, score, updated_at)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(judge_id, team_id, criterion_id)
+                    INSERT INTO round_draft_scores (
+                        judge_id, team_id, round_id, criterion_id, score, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(judge_id, team_id, round_id, criterion_id)
                     DO UPDATE SET score = excluded.score, updated_at = CURRENT_TIMESTAMP
                     """,
-                    (judge_id, team_id, int(criterion_id), score_value),
+                    (judge_id, team_id, round_id, int(criterion_id), score_value),
                 )
 
             if remarks_text is not None:
                 db.execute(
                     """
-                    INSERT INTO draft_remarks (judge_id, team_id, text, updated_at)
-                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(judge_id, team_id)
+                    INSERT INTO round_draft_remarks (
+                        judge_id, team_id, round_id, text, updated_at
+                    ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(judge_id, team_id, round_id)
                     DO UPDATE SET text = excluded.text, updated_at = CURRENT_TIMESTAMP
                     """,
-                    (judge_id, team_id, remarks_text),
+                    (judge_id, team_id, round_id, remarks_text),
                 )
     except ValueError as exc:
         return False, [str(exc)]
@@ -243,210 +256,203 @@ def _save_draft_evaluation(db, judge_id, team_id, scores_payload, remarks_text):
     return True, []
 
 
-def _load_draft_snapshot(db, judge_id, team_id):
+def _load_round_draft_snapshot(db, judge_id, team_id, round_id):
     draft_rows = db.execute(
         """
         SELECT criterion_id, score
-        FROM draft_scores
-        WHERE judge_id = ? AND team_id = ?
+        FROM round_draft_scores
+        WHERE judge_id = ? AND team_id = ? AND round_id = ?
         """,
-        (judge_id, team_id),
+        (judge_id, team_id, round_id),
     ).fetchall()
     draft_scores = {int(row["criterion_id"]): float(row["score"]) for row in draft_rows}
     draft_remarks = db.execute(
         """
         SELECT text
-        FROM draft_remarks
-        WHERE judge_id = ? AND team_id = ?
+        FROM round_draft_remarks
+        WHERE judge_id = ? AND team_id = ? AND round_id = ?
         LIMIT 1
         """,
-        (judge_id, team_id),
+        (judge_id, team_id, round_id),
     ).fetchone()
     return draft_scores, (draft_remarks["text"] if draft_remarks else "")
 
 
-def _submit_final_evaluation(db, judge_id, team_id, scores_payload, remarks_text):
-    criteria_lookup, criteria_list = _criteria_map(db)
+def _submit_round_final_evaluation(db, judge_id, team_id, round_id, scores_payload, remarks_text):
+    criteria_lookup, criteria_list = _criteria_map(db, round_id)
     errors, cleaned_scores = _validate_score_payload(scores_payload, criteria_lookup)
     if errors:
         return False, errors, False
-
     try:
         with transaction():
             existing_final = db.execute(
                 """
-                SELECT id, submitted_at
-                FROM final_submissions
-                WHERE judge_id = ? AND team_id = ?
+                SELECT id
+                FROM round_final_submissions
+                WHERE judge_id = ? AND team_id = ? AND round_id = ?
                 LIMIT 1
                 """,
-                (judge_id, team_id),
+                (judge_id, team_id, round_id),
             ).fetchone()
             if existing_final:
                 return True, [], True
 
-            # Merge inbound payload into draft first so "submit" is idempotent and atomic.
             for criterion_id, score_value in cleaned_scores.items():
                 if score_value is None:
                     db.execute(
                         """
-                        DELETE FROM draft_scores
-                        WHERE judge_id = ? AND team_id = ? AND criterion_id = ?
+                        DELETE FROM round_draft_scores
+                        WHERE judge_id = ? AND team_id = ? AND round_id = ? AND criterion_id = ?
                         """,
-                        (judge_id, team_id, int(criterion_id)),
+                        (judge_id, team_id, round_id, int(criterion_id)),
                     )
                     continue
                 db.execute(
                     """
-                    INSERT INTO draft_scores (judge_id, team_id, criterion_id, score, updated_at)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(judge_id, team_id, criterion_id)
+                    INSERT INTO round_draft_scores (
+                        judge_id, team_id, round_id, criterion_id, score, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(judge_id, team_id, round_id, criterion_id)
                     DO UPDATE SET score = excluded.score, updated_at = CURRENT_TIMESTAMP
                     """,
-                    (judge_id, team_id, int(criterion_id), score_value),
+                    (judge_id, team_id, round_id, int(criterion_id), score_value),
                 )
 
             if remarks_text is not None:
                 db.execute(
                     """
-                    INSERT INTO draft_remarks (judge_id, team_id, text, updated_at)
-                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(judge_id, team_id)
+                    INSERT INTO round_draft_remarks (
+                        judge_id, team_id, round_id, text, updated_at
+                    ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(judge_id, team_id, round_id)
                     DO UPDATE SET text = excluded.text, updated_at = CURRENT_TIMESTAMP
                     """,
-                    (judge_id, team_id, remarks_text),
+                    (judge_id, team_id, round_id, remarks_text),
                 )
 
-            final_scores_map, final_remarks_text = _load_draft_snapshot(db, judge_id, team_id)
+            final_scores_map, final_remarks_text = _load_round_draft_snapshot(
+                db, judge_id, team_id, round_id
+            )
             if not criteria_list:
-                raise ValueError("No criteria defined by admin yet")
+                raise ValueError("No criteria defined for this round yet")
             if len(final_scores_map) < len(criteria_list):
-                raise ValueError("All criteria must be scored before final submission")
+                raise ValueError("All criteria in this round must be scored before final submission")
 
             db.execute(
                 """
-                INSERT INTO final_submissions (judge_id, team_id, submitted_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(judge_id, team_id) DO NOTHING
+                INSERT INTO round_final_submissions (judge_id, team_id, round_id, submitted_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(judge_id, team_id, round_id) DO NOTHING
                 """,
-                (judge_id, team_id),
+                (judge_id, team_id, round_id),
             )
             for criterion in criteria_list:
                 criterion_id = int(criterion["id"])
                 db.execute(
                     """
-                    INSERT INTO final_scores (judge_id, team_id, criterion_id, score, updated_at)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(judge_id, team_id, criterion_id) DO NOTHING
+                    INSERT INTO round_final_scores (
+                        judge_id, team_id, round_id, criterion_id, score, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(judge_id, team_id, round_id, criterion_id) DO NOTHING
                     """,
-                    (judge_id, team_id, criterion_id, final_scores_map[criterion_id]),
+                    (judge_id, team_id, round_id, criterion_id, final_scores_map[criterion_id]),
                 )
             db.execute(
                 """
-                INSERT INTO final_remarks (judge_id, team_id, text, updated_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(judge_id, team_id) DO NOTHING
+                INSERT INTO round_final_remarks (
+                    judge_id, team_id, round_id, text, updated_at
+                ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(judge_id, team_id, round_id) DO NOTHING
                 """,
-                (judge_id, team_id, final_remarks_text or ""),
-            )
-
-            # Backward-compatible mirrors for existing admin data consumers.
-            for criterion in criteria_list:
-                criterion_id = int(criterion["id"])
-                db.execute(
-                    """
-                    INSERT INTO scores (judge_id, team_id, criterion_id, score, updated_at)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(judge_id, team_id, criterion_id)
-                    DO UPDATE SET score = excluded.score, updated_at = CURRENT_TIMESTAMP
-                    """,
-                    (judge_id, team_id, criterion_id, final_scores_map[criterion_id]),
-                )
-            db.execute(
-                """
-                INSERT INTO remarks (judge_id, team_id, text, updated_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(judge_id, team_id)
-                DO UPDATE SET text = excluded.text, updated_at = CURRENT_TIMESTAMP
-                """,
-                (judge_id, team_id, final_remarks_text or ""),
-            )
-            db.execute(
-                """
-                INSERT INTO submissions (judge_id, team_id, is_submitted, submitted_at, updated_at)
-                VALUES (?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                ON CONFLICT(judge_id, team_id)
-                DO UPDATE SET
-                    is_submitted = 1,
-                    submitted_at = COALESCE(submitted_at, CURRENT_TIMESTAMP),
-                    updated_at = CURRENT_TIMESTAMP
-                """,
-                (judge_id, team_id),
+                (judge_id, team_id, round_id, final_remarks_text or ""),
             )
     except ValueError as exc:
         return False, [str(exc)], False
-
     return True, [], False
 
 
-def _build_rankings(db):
+def _build_rankings(db, round_id):
     first_criterion_row = db.execute(
-        "SELECT id FROM criteria ORDER BY id LIMIT 1"
+        "SELECT id FROM round_criteria WHERE round_id = ? ORDER BY id LIMIT 1",
+        (round_id,),
     ).fetchone()
     first_criterion_id = first_criterion_row["id"] if first_criterion_row else None
 
-    params = []
+    params = [round_id, round_id]
     secondary_expr = "0"
     if first_criterion_id is not None:
         secondary_expr = """
             (
-                SELECT AVG(s2.score)
-                FROM scores s2
-                JOIN submissions sub2
-                    ON sub2.judge_id = s2.judge_id
-                    AND sub2.team_id = s2.team_id
-                    AND sub2.is_submitted = 1
-                WHERE s2.team_id = t.id AND s2.criterion_id = ?
+                SELECT AVG(fs2.score)
+                FROM round_final_scores fs2
+                JOIN round_final_submissions sub2
+                    ON sub2.judge_id = fs2.judge_id
+                    AND sub2.team_id = fs2.team_id
+                    AND sub2.round_id = fs2.round_id
+                WHERE fs2.round_id = ? AND fs2.team_id = t.id AND fs2.criterion_id = ?
             )
         """
-        params.append(first_criterion_id)
+        params.extend([round_id, first_criterion_id])
 
     rows = db.execute(
         f"""
-        WITH judge_totals AS (
+        WITH criteria_totals AS (
+            SELECT SUM(max_score) AS max_total
+            FROM round_criteria
+            WHERE round_id = ?
+        ),
+        judge_totals AS (
             SELECT
                 s.team_id,
                 s.judge_id,
                 SUM(s.score) AS total_score
-            FROM scores s
-            JOIN submissions sub
+            FROM round_final_scores s
+            JOIN round_final_submissions sub
                 ON sub.judge_id = s.judge_id
                 AND sub.team_id = s.team_id
-                AND sub.is_submitted = 1
+                AND sub.round_id = s.round_id
+            WHERE s.round_id = ?
             GROUP BY s.team_id, s.judge_id
         )
         SELECT
             t.id AS team_id,
             t.name AS team_name,
             ROUND(COALESCE(AVG(jt.total_score), 0), 4) AS avg_total_score,
+            ROUND(
+                CASE
+                    WHEN (SELECT max_total FROM criteria_totals) > 0
+                    THEN COALESCE(AVG(jt.total_score), 0) * 100.0 / (SELECT max_total FROM criteria_totals)
+                    ELSE 0
+                END,
+                4
+            ) AS avg_percentage,
             ROUND(COALESCE({secondary_expr}, 0), 4) AS secondary_score,
             COUNT(DISTINCT jt.judge_id) AS submitted_judges,
             ro.override_rank,
             ro.reason AS override_reason
         FROM teams t
         LEFT JOIN judge_totals jt ON jt.team_id = t.id
-        LEFT JOIN ranking_overrides ro ON ro.team_id = t.id
+        LEFT JOIN round_ranking_overrides ro
+            ON ro.team_id = t.id AND ro.round_id = ?
         GROUP BY t.id, t.name, ro.override_rank, ro.reason
-        ORDER BY avg_total_score DESC, secondary_score DESC, team_name ASC
+        ORDER BY avg_percentage DESC, secondary_score DESC, team_name ASC
         """,
-        tuple(params),
+        tuple(params + [round_id]),
     ).fetchall()
 
     auto_sorted = sorted(
         rows,
-        key=lambda r: (-float(r["avg_total_score"]), -float(r["secondary_score"]), r["team_name"]),
+        key=lambda r: (
+            -float(r["avg_percentage"]),
+            -float(r["secondary_score"]),
+            r["team_name"],
+        ),
     )
-    overrides = {int(r["override_rank"]): r["team_id"] for r in rows if r["override_rank"] is not None}
+    overrides = {
+        int(r["override_rank"]): r["team_id"]
+        for r in rows
+        if r["override_rank"] is not None
+    }
     used_teams = set(overrides.values())
     final_ranked = []
     next_auto = [r for r in auto_sorted if r["team_id"] not in used_teams]
@@ -467,30 +473,9 @@ def _build_rankings(db):
 
 
 def register_routes(app):
-    @app.after_request
-    def log_failed_requests(response):
-        if response.status_code >= 400:
-            app.logger.warning(
-                "HTTP %s %s -> %s",
-                request.method,
-                request.path,
-                response.status_code,
-            )
-        return response
-
-    @app.errorhandler(sqlite3.Error)
-    def handle_sqlite_error(error):
-        app.logger.exception("SQLite error on %s %s", request.method, request.path)
-        return jsonify({"error": "Database operation failed"}), 500
-
     @app.errorhandler(sqlite3.IntegrityError)
     def handle_integrity_error(_error):
         return jsonify({"error": "Database constraint violation"}), 409
-
-    @app.errorhandler(Exception)
-    def handle_unexpected_error(error):
-        app.logger.exception("Unhandled server error on %s %s", request.method, request.path)
-        return jsonify({"error": "Internal server error"}), 500
 
     @app.errorhandler(404)
     def handle_not_found(_error):
@@ -539,22 +524,154 @@ def register_routes(app):
     def me(user):
         return jsonify(user)
 
+    @app.get("/api/rounds")
+    @login_required
+    def rounds_for_user(_user):
+        return jsonify(_list_rounds(get_db()))
+
+    @app.get("/api/admin/rounds")
+    @role_required("admin")
+    def list_rounds(_user):
+        return jsonify(_list_rounds(get_db()))
+
+    @app.post("/api/admin/rounds")
+    @role_required("admin")
+    def create_round(_user):
+        payload = request.get_json(silent=True) or {}
+        name = (payload.get("name") or "").strip()
+        sequence = payload.get("sequence")
+        if not name:
+            return jsonify({"error": "Round name is required"}), 400
+        try:
+            sequence = int(sequence)
+        except (TypeError, ValueError):
+            return jsonify({"error": "sequence must be an integer"}), 400
+        with transaction():
+            db = get_db()
+            db.execute(
+                "INSERT INTO rounds (name, sequence) VALUES (?, ?)",
+                (name, sequence),
+            )
+        return jsonify({"success": True}), 201
+
+    @app.put("/api/admin/rounds/<int:round_id>")
+    @role_required("admin")
+    def update_round(_user, round_id):
+        payload = request.get_json(silent=True) or {}
+        fields = []
+        values = []
+        if "name" in payload:
+            name = (payload.get("name") or "").strip()
+            if not name:
+                return jsonify({"error": "Name cannot be empty"}), 400
+            fields.append("name = ?")
+            values.append(name)
+        if "sequence" in payload:
+            try:
+                seq = int(payload.get("sequence"))
+            except (TypeError, ValueError):
+                return jsonify({"error": "sequence must be integer"}), 400
+            fields.append("sequence = ?")
+            values.append(seq)
+        if not fields:
+            return jsonify({"error": "No updates provided"}), 400
+        values.append(round_id)
+        with transaction():
+            db = get_db()
+            updated = db.execute(
+                f"UPDATE rounds SET {', '.join(fields)} WHERE id = ?",
+                tuple(values),
+            ).rowcount
+        if not updated:
+            return jsonify({"error": "Round not found"}), 404
+        return jsonify({"success": True})
+
+    @app.delete("/api/admin/rounds/<int:round_id>")
+    @role_required("admin")
+    def delete_round(_user, round_id):
+        with transaction():
+            db = get_db()
+            remaining = db.execute("SELECT COUNT(*) AS c FROM rounds").fetchone()["c"]
+            if remaining <= 1:
+                return jsonify({"error": "At least one round is required"}), 400
+            deleted = db.execute("DELETE FROM rounds WHERE id = ?", (round_id,)).rowcount
+            if not deleted:
+                return jsonify({"error": "Round not found"}), 404
+            active = db.execute(
+                "SELECT value FROM settings WHERE key='active_round_id' LIMIT 1"
+            ).fetchone()
+            if active and int(active["value"]) == round_id:
+                first = db.execute(
+                    "SELECT id FROM rounds ORDER BY sequence, id LIMIT 1"
+                ).fetchone()
+                if first:
+                    db.execute(
+                        """
+                        INSERT INTO settings (key, value) VALUES ('active_round_id', ?)
+                        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                        """,
+                        (str(first["id"]),),
+                    )
+        return jsonify({"success": True})
+
+    @app.get("/api/admin/settings/active-round")
+    @role_required("admin")
+    def get_active_round(_user):
+        db = get_db()
+        rid, round_row, err = _resolve_round_id(db, required=False)
+        if err:
+            return err
+        return jsonify({"active_round_id": rid, "round": round_row})
+
+    @app.put("/api/admin/settings/active-round")
+    @role_required("admin")
+    def update_active_round(_user):
+        db = get_db()
+        payload = request.get_json(silent=True) or {}
+        rid, _round_row, err = _resolve_round_id(db, payload.get("round_id"), required=True)
+        if err:
+            return err
+        with transaction():
+            db.execute(
+                """
+                INSERT INTO settings (key, value) VALUES ('active_round_id', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (str(rid),),
+            )
+        return jsonify({"success": True, "active_round_id": rid})
+
     @app.get("/api/admin/judges")
     @role_required("admin")
     def list_judges(_user):
         db = get_db()
+        rid, _round_row, err = _resolve_round_id(db, required=False)
+        if err:
+            return err
         judges = db.execute(
             """
-            SELECT u.id, u.name, u.role,
-                COUNT(DISTINCT a.team_id) AS assigned_teams
+            SELECT u.id, u.name, u.role
             FROM users u
-            LEFT JOIN assignments a ON a.judge_id = u.id
             WHERE u.role = 'judge'
-            GROUP BY u.id, u.name, u.role
             ORDER BY u.name
             """
         ).fetchall()
-        return jsonify(judges)
+        out = []
+        for j in judges:
+            assigned = 0
+            if rid is not None:
+                assigned = db.execute(
+                    """
+                    SELECT COUNT(*) AS c
+                    FROM round_assignments
+                    WHERE judge_id = ? AND round_id = ?
+                    """,
+                    (j["id"], rid),
+                ).fetchone()["c"]
+            item = dict(j)
+            item["assigned_teams"] = assigned
+            out.append(item)
+        return jsonify(out)
 
     @app.post("/api/admin/judges")
     @role_required("admin")
@@ -566,9 +683,6 @@ def register_routes(app):
             return jsonify({"error": "Judge name and password are required"}), 400
         with transaction():
             db = get_db()
-            existing = db.execute("SELECT id FROM users WHERE name = ? LIMIT 1", (name,)).fetchone()
-            if existing:
-                return jsonify({"error": "User name already exists"}), 409
             db.execute(
                 "INSERT INTO users (name, role, password_hash) VALUES (?, 'judge', ?)",
                 (name, generate_password_hash(password)),
@@ -581,13 +695,6 @@ def register_routes(app):
         payload = request.get_json(silent=True) or {}
         name = payload.get("name")
         password = payload.get("password")
-        db = get_db()
-        judge = db.execute(
-            "SELECT id FROM users WHERE id = ? AND role = 'judge'", (judge_id,)
-        ).fetchone()
-        if not judge:
-            return jsonify({"error": "Judge not found"}), 404
-
         fields = []
         values = []
         if name is not None:
@@ -603,7 +710,13 @@ def register_routes(app):
             return jsonify({"error": "No updates provided"}), 400
         values.append(judge_id)
         with transaction():
-            db.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", tuple(values))
+            db = get_db()
+            updated = db.execute(
+                f"UPDATE users SET {', '.join(fields)} WHERE id = ? AND role = 'judge'",
+                tuple(values),
+            ).rowcount
+        if not updated:
+            return jsonify({"error": "Judge not found"}), 404
         return jsonify({"success": True})
 
     @app.delete("/api/admin/judges/<int:judge_id>")
@@ -625,17 +738,32 @@ def register_routes(app):
     @role_required("admin")
     def list_teams(_user):
         db = get_db()
+        rid, _round_row, err = _resolve_round_id(db, required=False)
+        if err:
+            return err
         teams = db.execute(
             """
-            SELECT t.id, t.name, t.problem_statement, t.expected_solution,
-                COUNT(DISTINCT a.judge_id) AS assigned_judges
+            SELECT t.id, t.name, t.problem_statement, t.expected_solution
             FROM teams t
-            LEFT JOIN assignments a ON a.team_id = t.id
-            GROUP BY t.id, t.name, t.problem_statement, t.expected_solution
             ORDER BY t.name
             """
         ).fetchall()
-        return jsonify(teams)
+        out = []
+        for t in teams:
+            assigned = 0
+            if rid is not None:
+                assigned = db.execute(
+                    """
+                    SELECT COUNT(*) AS c
+                    FROM round_assignments
+                    WHERE team_id = ? AND round_id = ?
+                    """,
+                    (t["id"], rid),
+                ).fetchone()["c"]
+            item = dict(t)
+            item["assigned_judges"] = assigned
+            out.append(item)
+        return jsonify(out)
 
     @app.post("/api/admin/teams")
     @role_required("admin")
@@ -644,8 +772,6 @@ def register_routes(app):
         name = (payload.get("name") or "").strip()
         if not name:
             return jsonify({"error": "Team name is required"}), 400
-        problem_statement = payload.get("problem_statement") or ""
-        expected_solution = payload.get("expected_solution") or ""
         with transaction():
             db = get_db()
             db.execute(
@@ -653,7 +779,11 @@ def register_routes(app):
                 INSERT INTO teams (name, problem_statement, expected_solution)
                 VALUES (?, ?, ?)
                 """,
-                (name, problem_statement, expected_solution),
+                (
+                    name,
+                    payload.get("problem_statement") or "",
+                    payload.get("expected_solution") or "",
+                ),
             )
         return jsonify({"success": True}), 201
 
@@ -681,7 +811,8 @@ def register_routes(app):
         with transaction():
             db = get_db()
             updated = db.execute(
-                f"UPDATE teams SET {', '.join(fields)} WHERE id = ?", tuple(values)
+                f"UPDATE teams SET {', '.join(fields)} WHERE id = ?",
+                tuple(values),
             ).rowcount
         if not updated:
             return jsonify({"error": "Team not found"}), 404
@@ -701,29 +832,48 @@ def register_routes(app):
     @role_required("admin")
     def list_criteria(_user):
         db = get_db()
-        return jsonify(
-            db.execute("SELECT id, name, max_score FROM criteria ORDER BY id").fetchall()
-        )
+        rid, _round_row, err = _resolve_round_id(db, required=False)
+        if err:
+            return err
+        if rid is None:
+            return jsonify([])
+        criteria = db.execute(
+            """
+            SELECT c.id, c.round_id, r.name AS round_name, c.name, c.max_score
+            FROM round_criteria c
+            JOIN rounds r ON r.id = c.round_id
+            WHERE c.round_id = ?
+            ORDER BY c.id
+            """,
+            (rid,),
+        ).fetchall()
+        return jsonify(criteria)
 
     @app.post("/api/admin/criteria")
     @role_required("admin")
     def create_criteria(_user):
+        db = get_db()
         payload = request.get_json(silent=True) or {}
+        rid, _round_row, err = _resolve_round_id(db, payload.get("round_id"), required=True)
+        if err:
+            return err
         name = (payload.get("name") or "").strip()
         max_score = payload.get("max_score")
         if not name:
             return jsonify({"error": "Criterion name is required"}), 400
         try:
             max_score = float(max_score)
-            if max_score <= 0:
+            if max_score <= 0 or max_score > 10:
                 raise ValueError
         except (TypeError, ValueError):
-            return jsonify({"error": "max_score must be > 0"}), 400
+            return jsonify({"error": "max_score must be > 0 and <= 10"}), 400
         with transaction():
-            db = get_db()
             db.execute(
-                "INSERT INTO criteria (name, max_score) VALUES (?, ?)",
-                (name, max_score),
+                """
+                INSERT INTO round_criteria (round_id, name, max_score)
+                VALUES (?, ?, ?)
+                """,
+                (rid, name, max_score),
             )
         return jsonify({"success": True}), 201
 
@@ -742,10 +892,10 @@ def register_routes(app):
         if "max_score" in payload:
             try:
                 max_score = float(payload.get("max_score"))
-                if max_score <= 0:
+                if max_score <= 0 or max_score > 10:
                     raise ValueError
             except (TypeError, ValueError):
-                return jsonify({"error": "max_score must be > 0"}), 400
+                return jsonify({"error": "max_score must be > 0 and <= 10"}), 400
             fields.append("max_score = ?")
             values.append(max_score)
         if not fields:
@@ -754,7 +904,7 @@ def register_routes(app):
         with transaction():
             db = get_db()
             updated = db.execute(
-                f"UPDATE criteria SET {', '.join(fields)} WHERE id = ?",
+                f"UPDATE round_criteria SET {', '.join(fields)} WHERE id = ?",
                 tuple(values),
             ).rowcount
         if not updated:
@@ -766,7 +916,10 @@ def register_routes(app):
     def delete_criteria(_user, criterion_id):
         with transaction():
             db = get_db()
-            deleted = db.execute("DELETE FROM criteria WHERE id = ?", (criterion_id,)).rowcount
+            deleted = db.execute(
+                "DELETE FROM round_criteria WHERE id = ?",
+                (criterion_id,),
+            ).rowcount
         if not deleted:
             return jsonify({"error": "Criterion not found"}), 404
         return jsonify({"success": True})
@@ -775,40 +928,47 @@ def register_routes(app):
     @role_required("admin")
     def list_assignments(_user):
         db = get_db()
+        rid, _round_row, err = _resolve_round_id(db, required=True)
+        if err:
+            return err
         rows = db.execute(
             """
-            SELECT a.judge_id, u.name AS judge_name, a.team_id, t.name AS team_name
-            FROM assignments a
+            SELECT
+                a.round_id,
+                a.judge_id, u.name AS judge_name,
+                a.team_id, t.name AS team_name
+            FROM round_assignments a
             JOIN users u ON u.id = a.judge_id
             JOIN teams t ON t.id = a.team_id
+            WHERE a.round_id = ?
             ORDER BY u.name, t.name
-            """
+            """,
+            (rid,),
         ).fetchall()
         return jsonify(rows)
 
     @app.put("/api/admin/assignments/<int:judge_id>")
     @role_required("admin")
     def set_assignments(_user, judge_id):
+        db = get_db()
         payload = request.get_json(silent=True) or {}
+        rid, _round_row, err = _resolve_round_id(db, payload.get("round_id"), required=True)
+        if err:
+            return err
         team_ids = payload.get("team_ids")
         if not isinstance(team_ids, list):
             return jsonify({"error": "team_ids must be a list"}), 400
-
-        clean_ids = []
         try:
-            clean_ids = [int(team_id) for team_id in team_ids]
+            clean_ids = sorted(set(int(team_id) for team_id in team_ids))
         except (TypeError, ValueError):
             return jsonify({"error": "team_ids must be integers"}), 400
-        clean_ids = sorted(set(clean_ids))
-
         with transaction():
-            db = get_db()
             judge = db.execute(
-                "SELECT id FROM users WHERE id = ? AND role = 'judge'", (judge_id,)
+                "SELECT id FROM users WHERE id = ? AND role = 'judge'",
+                (judge_id,),
             ).fetchone()
             if not judge:
                 return jsonify({"error": "Judge not found"}), 404
-
             if clean_ids:
                 placeholders = ",".join("?" for _ in clean_ids)
                 existing_rows = db.execute(
@@ -820,19 +980,21 @@ def register_routes(app):
                 if invalid_ids:
                     return (
                         jsonify(
-                            {
-                                "error": "Some team_ids are invalid",
-                                "invalid_team_ids": invalid_ids,
-                            }
+                            {"error": "Some team_ids are invalid", "invalid_team_ids": invalid_ids}
                         ),
                         400,
                     )
-
-            db.execute("DELETE FROM assignments WHERE judge_id = ?", (judge_id,))
+            db.execute(
+                "DELETE FROM round_assignments WHERE judge_id = ? AND round_id = ?",
+                (judge_id, rid),
+            )
             for team_id in clean_ids:
                 db.execute(
-                    "INSERT INTO assignments (judge_id, team_id) VALUES (?, ?)",
-                    (judge_id, team_id),
+                    """
+                    INSERT INTO round_assignments (judge_id, team_id, round_id)
+                    VALUES (?, ?, ?)
+                    """,
+                    (judge_id, team_id, rid),
                 )
         return jsonify({"success": True})
 
@@ -840,11 +1002,11 @@ def register_routes(app):
     @role_required("admin")
     def admin_scores(_user):
         db = get_db()
-        team_id = request.args.get("team_id", type=int)
-        judge_id = request.args.get("judge_id", type=int)
-        submitted_only = request.args.get("submitted_only", default=0, type=int)
-
-        query = """
+        rid, _round_row, err = _resolve_round_id(db, required=True)
+        if err:
+            return err
+        rows = db.execute(
+            """
             SELECT
                 s.judge_id,
                 u.name AS judge_name,
@@ -855,101 +1017,124 @@ def register_routes(app):
                 c.max_score,
                 s.score,
                 s.updated_at,
-                COALESCE(sub.is_submitted, 0) AS is_submitted,
+                CASE WHEN sub.id IS NULL THEN 0 ELSE 1 END AS is_submitted,
                 sub.submitted_at,
-                COALESCE(r.text, '') AS remarks
-            FROM scores s
+                COALESCE(rm.text, '') AS remarks
+            FROM round_final_scores s
             JOIN users u ON u.id = s.judge_id
             JOIN teams t ON t.id = s.team_id
-            JOIN criteria c ON c.id = s.criterion_id
-            LEFT JOIN submissions sub
-                ON sub.judge_id = s.judge_id AND sub.team_id = s.team_id
-            LEFT JOIN remarks r
-                ON r.judge_id = s.judge_id AND r.team_id = s.team_id
-            WHERE 1=1
-        """
-        params = []
-        if team_id is not None:
-            query += " AND s.team_id = ?"
-            params.append(team_id)
-        if judge_id is not None:
-            query += " AND s.judge_id = ?"
-            params.append(judge_id)
-        if submitted_only:
-            query += " AND COALESCE(sub.is_submitted, 0) = 1"
-        query += " ORDER BY t.name, u.name, c.id"
-
-        rows = db.execute(query, tuple(params)).fetchall()
+            JOIN round_criteria c ON c.id = s.criterion_id
+            LEFT JOIN round_final_submissions sub
+                ON sub.judge_id = s.judge_id
+                AND sub.team_id = s.team_id
+                AND sub.round_id = s.round_id
+            LEFT JOIN round_final_remarks rm
+                ON rm.judge_id = s.judge_id
+                AND rm.team_id = s.team_id
+                AND rm.round_id = s.round_id
+            WHERE s.round_id = ?
+            ORDER BY t.name, u.name, c.id
+            """,
+            (rid,),
+        ).fetchall()
         return jsonify(rows)
 
     @app.get("/api/admin/rankings")
     @role_required("admin")
     def rankings(_user):
-        return jsonify(_build_rankings(get_db()))
+        db = get_db()
+        rid, round_row, err = _resolve_round_id(db, required=True)
+        if err:
+            return err
+        rows = _build_rankings(db, rid)
+        return jsonify(
+            {
+                "round_id": rid,
+                "round": round_row,
+                "rows": rows,
+            }
+        )
 
     @app.put("/api/admin/rankings/override")
     @role_required("admin")
     def upsert_override(user):
+        db = get_db()
         payload = request.get_json(silent=True) or {}
-        team_id = payload.get("team_id")
-        override_rank = payload.get("override_rank")
-        reason = payload.get("reason") or ""
+        rid, _round_row, err = _resolve_round_id(db, payload.get("round_id"), required=True)
+        if err:
+            return err
         try:
-            team_id = int(team_id)
-            override_rank = int(override_rank)
+            team_id = int(payload.get("team_id"))
+            override_rank = int(payload.get("override_rank"))
             if override_rank <= 0:
                 raise ValueError
         except (TypeError, ValueError):
-            return jsonify({"error": "team_id and override_rank must be valid positive integers"}), 400
+            return jsonify({"error": "team_id and override_rank must be positive integers"}), 400
+        reason = payload.get("reason") or ""
         with transaction():
-            db = get_db()
             db.execute(
                 """
-                INSERT INTO ranking_overrides (team_id, override_rank, reason, updated_by, updated_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(team_id)
+                INSERT INTO round_ranking_overrides (
+                    round_id, team_id, override_rank, reason, updated_by, updated_at
+                ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(round_id, team_id)
                 DO UPDATE SET
                     override_rank = excluded.override_rank,
                     reason = excluded.reason,
                     updated_by = excluded.updated_by,
                     updated_at = CURRENT_TIMESTAMP
                 """,
-                (team_id, override_rank, reason, user["id"]),
+                (rid, team_id, override_rank, reason, user["id"]),
             )
         return jsonify({"success": True})
 
     @app.delete("/api/admin/rankings/override/<int:team_id>")
     @role_required("admin")
     def delete_override(_user, team_id):
+        db = get_db()
+        rid, _round_row, err = _resolve_round_id(db, required=True)
+        if err:
+            return err
         with transaction():
-            db = get_db()
-            db.execute("DELETE FROM ranking_overrides WHERE team_id = ?", (team_id,))
+            db.execute(
+                "DELETE FROM round_ranking_overrides WHERE round_id = ? AND team_id = ?",
+                (rid, team_id),
+            )
         return jsonify({"success": True})
 
     @app.get("/api/admin/dashboard")
     @role_required("admin")
     def dashboard(_user):
         db = get_db()
+        rid, round_row, err = _resolve_round_id(db, required=True)
+        if err:
+            return err
         counts = {
             "judges": db.execute("SELECT COUNT(*) AS c FROM users WHERE role='judge'").fetchone()["c"],
             "teams": db.execute("SELECT COUNT(*) AS c FROM teams").fetchone()["c"],
-            "criteria": db.execute("SELECT COUNT(*) AS c FROM criteria").fetchone()["c"],
-            "assignments": db.execute("SELECT COUNT(*) AS c FROM assignments").fetchone()["c"],
+            "criteria": db.execute(
+                "SELECT COUNT(*) AS c FROM round_criteria WHERE round_id = ?",
+                (rid,),
+            ).fetchone()["c"],
+            "assignments": db.execute(
+                "SELECT COUNT(*) AS c FROM round_assignments WHERE round_id = ?",
+                (rid,),
+            ).fetchone()["c"],
+            "submitted": db.execute(
+                "SELECT COUNT(*) AS c FROM round_final_submissions WHERE round_id = ?",
+                (rid,),
+            ).fetchone()["c"],
+            "submission_total_records": db.execute(
+                "SELECT COUNT(*) AS c FROM round_final_submissions WHERE round_id = ?",
+                (rid,),
+            ).fetchone()["c"],
         }
-        submission_stats = db.execute(
-            """
-            SELECT
-                SUM(CASE WHEN is_submitted = 1 THEN 1 ELSE 0 END) AS submitted,
-                COUNT(*) AS total
-            FROM submissions
-            """
-        ).fetchone()
-        counts["submitted"] = submission_stats["submitted"] or 0
-        counts["submission_total_records"] = submission_stats["total"] or 0
         return jsonify(
             {
                 "counts": counts,
-                "rankings": _build_rankings(db),
+                "round_id": rid,
+                "round": round_row,
+                "rankings": _build_rankings(db, rid),
                 "server_time": datetime.now().isoformat(),
             }
         )
@@ -958,28 +1143,35 @@ def register_routes(app):
     @role_required("admin")
     def export_csv(_user):
         db = get_db()
-        rankings = _build_rankings(db)
+        rid, round_row, err = _resolve_round_id(db, required=True)
+        if err:
+            return err
+        rankings_rows = _build_rankings(db, rid)
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(
             [
+                "Round",
                 "Rank",
                 "Team ID",
                 "Team Name",
                 "Average Total Score",
+                "Average Percentage",
                 "Secondary Score",
                 "Submitted Judges",
                 "Override Rank",
                 "Override Reason",
             ]
         )
-        for row in rankings:
+        for row in rankings_rows:
             writer.writerow(
                 [
+                    round_row["name"] if round_row else f"Round {rid}",
                     row["rank"],
                     row["team_id"],
                     row["team_name"],
                     row["avg_total_score"],
+                    row["avg_percentage"],
                     row["secondary_score"],
                     row["submitted_judges"],
                     row["override_rank"] if row["override_rank"] is not None else "",
@@ -987,27 +1179,12 @@ def register_routes(app):
                 ]
             )
         output.seek(0)
+        safe_name = (round_row["name"] if round_row else f"round_{rid}").replace(" ", "_")
         return send_file(
             io.BytesIO(output.getvalue().encode("utf-8")),
             mimetype="text/csv",
             as_attachment=True,
-            download_name="hackathon_rankings.csv",
-        )
-
-    @app.get("/api/admin/export")
-    @app.get("/admin/export")
-    @role_required("admin")
-    def export_database(_user):
-        backup_path = _backup_database_file(
-            app.config["DATABASE_PATH"],
-            app.config["DB_BACKUP_DIR"],
-        )
-        app.logger.info("Manual DB export generated: %s", backup_path)
-        return send_file(
-            backup_path,
-            as_attachment=True,
-            download_name=os.path.basename(backup_path),
-            mimetype="application/octet-stream",
+            download_name=f"hackathon_rankings_{safe_name}.csv",
         )
 
     @app.get("/api/admin/settings/submission-deadline")
@@ -1046,6 +1223,9 @@ def register_routes(app):
     @role_required("judge")
     def judge_teams(user):
         db = get_db()
+        rid, round_row, err = _resolve_round_id(db, required=True)
+        if err:
+            return err
         rows = db.execute(
             """
             SELECT
@@ -1055,22 +1235,28 @@ def register_routes(app):
                 fs.submitted_at,
                 COALESCE(draft_counts.score_count, 0) AS draft_score_count,
                 COALESCE(dr.text, '') AS draft_remarks
-            FROM assignments a
+            FROM round_assignments a
             JOIN teams t ON t.id = a.team_id
-            LEFT JOIN final_submissions fs
-                ON fs.judge_id = a.judge_id AND fs.team_id = a.team_id
+            LEFT JOIN round_final_submissions fs
+                ON fs.judge_id = a.judge_id
+                AND fs.team_id = a.team_id
+                AND fs.round_id = a.round_id
             LEFT JOIN (
-                SELECT judge_id, team_id, COUNT(*) AS score_count
-                FROM draft_scores
-                GROUP BY judge_id, team_id
+                SELECT judge_id, team_id, round_id, COUNT(*) AS score_count
+                FROM round_draft_scores
+                GROUP BY judge_id, team_id, round_id
             ) draft_counts
-                ON draft_counts.judge_id = a.judge_id AND draft_counts.team_id = a.team_id
-            LEFT JOIN draft_remarks dr
-                ON dr.judge_id = a.judge_id AND dr.team_id = a.team_id
-            WHERE a.judge_id = ?
+                ON draft_counts.judge_id = a.judge_id
+                AND draft_counts.team_id = a.team_id
+                AND draft_counts.round_id = a.round_id
+            LEFT JOIN round_draft_remarks dr
+                ON dr.judge_id = a.judge_id
+                AND dr.team_id = a.team_id
+                AND dr.round_id = a.round_id
+            WHERE a.judge_id = ? AND a.round_id = ?
             ORDER BY t.name
             """,
-            (user["id"],),
+            (user["id"], rid),
         ).fetchall()
         items = []
         for row in rows:
@@ -1081,15 +1267,20 @@ def register_routes(app):
                 status = "in_progress"
             item = dict(row)
             item["status"] = status
+            item["round_id"] = rid
+            item["round_name"] = round_row["name"] if round_row else None
             items.append(item)
-        return jsonify(items)
+        return jsonify({"round_id": rid, "round": round_row, "teams": items})
 
     @app.get("/api/judge/teams/<int:team_id>/evaluation")
     @role_required("judge")
     def get_evaluation(user, team_id):
         db = get_db()
-        if not _require_assignment(db, user["id"], team_id):
-            return jsonify({"error": "Team not assigned to this judge"}), 403
+        rid, round_row, err = _resolve_round_id(db, required=True)
+        if err:
+            return err
+        if not _require_round_assignment(db, user["id"], team_id, rid):
+            return jsonify({"error": "Team not assigned to this judge for this round"}), 403
 
         team = db.execute(
             """
@@ -1103,35 +1294,48 @@ def register_routes(app):
         if not team:
             return jsonify({"error": "Team not found"}), 404
 
-        criteria = db.execute("SELECT id, name, max_score FROM criteria ORDER BY id").fetchall()
+        criteria = db.execute(
+            """
+            SELECT id, round_id, name, max_score
+            FROM round_criteria
+            WHERE round_id = ?
+            ORDER BY id
+            """,
+            (rid,),
+        ).fetchall()
         final_submission = db.execute(
             """
             SELECT submitted_at
-            FROM final_submissions
-            WHERE judge_id = ? AND team_id = ?
+            FROM round_final_submissions
+            WHERE judge_id = ? AND team_id = ? AND round_id = ?
             LIMIT 1
             """,
-            (user["id"], team_id),
+            (user["id"], team_id, rid),
         ).fetchone()
 
-        score_source_table = "draft_scores"
-        remarks_source_table = "draft_remarks"
+        score_source_table = "round_draft_scores"
+        remarks_source_table = "round_draft_remarks"
         if final_submission:
-            score_source_table = "final_scores"
-            remarks_source_table = "final_remarks"
+            score_source_table = "round_final_scores"
+            remarks_source_table = "round_final_remarks"
 
         score_rows = db.execute(
             f"""
             SELECT criterion_id, score
             FROM {score_source_table}
-            WHERE judge_id = ? AND team_id = ?
+            WHERE judge_id = ? AND team_id = ? AND round_id = ?
             """,
-            (user["id"], team_id),
+            (user["id"], team_id, rid),
         ).fetchall()
         scores = {str(row["criterion_id"]): row["score"] for row in score_rows}
         remarks = db.execute(
-            f"SELECT text FROM {remarks_source_table} WHERE judge_id = ? AND team_id = ? LIMIT 1",
-            (user["id"], team_id),
+            f"""
+            SELECT text
+            FROM {remarks_source_table}
+            WHERE judge_id = ? AND team_id = ? AND round_id = ?
+            LIMIT 1
+            """,
+            (user["id"], team_id, rid),
         ).fetchone()
 
         deadline = _get_submission_deadline(db)
@@ -1139,6 +1343,8 @@ def register_routes(app):
         editable = _is_editable(db) and not final_submission
         return jsonify(
             {
+                "round_id": rid,
+                "round": round_row,
                 "team": team,
                 "criteria": criteria,
                 "scores": scores,
@@ -1157,48 +1363,58 @@ def register_routes(app):
     @role_required("judge")
     def save_draft(user, team_id):
         db = get_db()
-        if not _require_assignment(db, user["id"], team_id):
-            return jsonify({"error": "Team not assigned to this judge"}), 403
+        payload = request.get_json(silent=True) or {}
+        rid, _round_row, err = _resolve_round_id(db, payload.get("round_id"), required=True)
+        if err:
+            return err
+        if not _require_round_assignment(db, user["id"], team_id, rid):
+            return jsonify({"error": "Team not assigned to this judge for this round"}), 403
         if not _is_editable(db):
             return jsonify({"error": "Submission deadline passed. Editing is locked."}), 403
         submitted = db.execute(
             """
             SELECT id
-            FROM final_submissions
-            WHERE judge_id = ? AND team_id = ?
+            FROM round_final_submissions
+            WHERE judge_id = ? AND team_id = ? AND round_id = ?
             LIMIT 1
             """,
-            (user["id"], team_id),
+            (user["id"], team_id, rid),
         ).fetchone()
         if submitted:
             return jsonify({"error": "Final submission is immutable."}), 409
 
-        payload = request.get_json(silent=True) or {}
-        ok, errors = _save_draft_evaluation(
-            db,
+        ok, errors = _save_round_draft_evaluation(
+            db=db,
             judge_id=user["id"],
             team_id=team_id,
+            round_id=rid,
             scores_payload=payload.get("scores") or {},
             remarks_text=payload.get("remarks"),
         )
         if not ok:
             return jsonify({"error": "Invalid draft payload", "details": errors}), 400
-        return jsonify({"success": True, "status": "in_progress", "synced": True})
+        return jsonify(
+            {"success": True, "status": "in_progress", "synced": True, "round_id": rid}
+        )
 
     @app.post("/api/judge/teams/<int:team_id>/submit")
     @role_required("judge")
     def submit_scores(user, team_id):
         db = get_db()
-        if not _require_assignment(db, user["id"], team_id):
-            return jsonify({"error": "Team not assigned to this judge"}), 403
+        payload = request.get_json(silent=True) or {}
+        rid, _round_row, err = _resolve_round_id(db, payload.get("round_id"), required=True)
+        if err:
+            return err
+        if not _require_round_assignment(db, user["id"], team_id, rid):
+            return jsonify({"error": "Team not assigned to this judge for this round"}), 403
         if not _is_editable(db):
             return jsonify({"error": "Submission deadline passed. Editing is locked."}), 403
 
-        payload = request.get_json(silent=True) or {}
-        ok, errors, already_submitted = _submit_final_evaluation(
-            db,
+        ok, errors, already_submitted = _submit_round_final_evaluation(
+            db=db,
             judge_id=user["id"],
             team_id=team_id,
+            round_id=rid,
             scores_payload=payload.get("scores") or {},
             remarks_text=payload.get("remarks"),
         )
@@ -1209,6 +1425,7 @@ def register_routes(app):
                 "success": True,
                 "status": "submitted",
                 "already_submitted": already_submitted,
+                "round_id": rid,
             }
         )
 

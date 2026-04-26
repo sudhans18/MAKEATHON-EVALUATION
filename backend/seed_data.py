@@ -106,6 +106,93 @@ def seed():
                         (name, max_score),
                     )
 
+            rounds = [
+                ("Round 1 - Evening", 1),
+                ("Round 2 - Midnight", 2),
+                ("Round 3 - Morning", 3),
+            ]
+            for round_name, sequence in rounds:
+                exists = db.execute(
+                    "SELECT id FROM rounds WHERE name = ? OR sequence = ? LIMIT 1",
+                    (round_name, sequence),
+                ).fetchone()
+                if not exists:
+                    db.execute(
+                        "INSERT INTO rounds (name, sequence) VALUES (?, ?)",
+                        (round_name, sequence),
+                    )
+                else:
+                    db.execute(
+                        "UPDATE rounds SET name = ?, sequence = ? WHERE id = ?",
+                        (round_name, sequence, exists["id"]),
+                    )
+
+            round_rows = db.execute(
+                "SELECT id, sequence FROM rounds ORDER BY sequence, id"
+            ).fetchall()
+
+            round_criteria_map = {
+                1: [
+                    ("Problem Understanding", 10),
+                    ("Approach Clarity", 10),
+                    ("Innovation", 10),
+                    ("Technical Direction", 10),
+                    ("Pitch Clarity", 10),
+                ],
+                2: [
+                    ("Progress vs Plan", 10),
+                    ("Technical Execution", 10),
+                    ("System Design", 10),
+                    ("UI/UX Progress", 10),
+                    ("Feasibility", 10),
+                    ("Team Collaboration", 10),
+                ],
+                3: [
+                    ("Final Functionality", 10),
+                    ("Innovation", 10),
+                    ("Technical Complexity", 10),
+                    ("UI/UX", 10),
+                    ("Scalability", 10),
+                    ("Feasibility", 10),
+                    ("Presentation & Demo", 10),
+                ],
+            }
+
+            for round_row in round_rows:
+                seq = int(round_row["sequence"])
+                criteria_rows = round_criteria_map.get(seq, [])
+                for c_name, c_max in criteria_rows:
+                    exists = db.execute(
+                        """
+                        SELECT id
+                        FROM round_criteria
+                        WHERE round_id = ? AND name = ?
+                        LIMIT 1
+                        """,
+                        (round_row["id"], c_name),
+                    ).fetchone()
+                    if not exists:
+                        db.execute(
+                            """
+                            INSERT INTO round_criteria (round_id, name, max_score)
+                            VALUES (?, ?, ?)
+                            """,
+                            (round_row["id"], c_name, c_max),
+                        )
+
+            first_round = db.execute(
+                "SELECT id FROM rounds ORDER BY sequence, id LIMIT 1"
+            ).fetchone()
+            if first_round:
+                db.execute(
+                    """
+                    INSERT INTO settings (key, value)
+                    VALUES ('active_round_id', ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """,
+                    (str(first_round["id"]),),
+                )
+
             # Keep manual assignment ownership with admin UI by default.
             # Optional: set AUTO_ASSIGN_ALL=1 to pre-assign all teams to all judges.
             auto_assign_all = os.environ.get("AUTO_ASSIGN_ALL", "0") == "1"
@@ -114,16 +201,18 @@ def seed():
                     "SELECT id FROM users WHERE role = 'judge' ORDER BY id"
                 ).fetchall()
                 team_rows = db.execute("SELECT id FROM teams ORDER BY id").fetchall()
+                round_rows = db.execute("SELECT id FROM rounds ORDER BY sequence, id").fetchall()
                 team_ids = [row["id"] for row in team_rows]
                 for judge in judges:
-                    for team_id in team_ids:
-                        db.execute(
-                            """
-                            INSERT OR IGNORE INTO assignments (judge_id, team_id)
-                            VALUES (?, ?)
-                            """,
-                            (judge["id"], team_id),
-                        )
+                    for round_row in round_rows:
+                        for team_id in team_ids:
+                            db.execute(
+                                """
+                                INSERT OR IGNORE INTO round_assignments (judge_id, team_id, round_id)
+                                VALUES (?, ?, ?)
+                                """,
+                                (judge["id"], team_id, round_row["id"]),
+                            )
 
             db.execute(
                 "DELETE FROM settings WHERE key = 'submission_deadline'"
