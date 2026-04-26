@@ -3,79 +3,121 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hackathon Judging System</title>
-  <link rel="stylesheet" href="/static/css/app.css" />
+  <title>Spider-Verse Judging Portal</title>
+  <link rel="stylesheet" href="/static/css/spiderman.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Michroma&family=Rajdhani:wght@400;500;700&family=Outfit:wght@400;700&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body>
   <div id="app">
-    <header class="topbar">
-      <div>
-        <p class="eyebrow">Offline LAN</p>
-        <h1 id="pageTitle">Hackathon Judging System</h1>
-      </div>
-      <div class="topbar-actions hidden" id="sessionActions">
-        <span id="userNamePill" class="pill"></span>
-        <button id="logoutBtn" class="btn btn-danger" type="button">Logout</button>
-      </div>
-    </header>
 
     <section id="networkBanner" class="banner hidden"></section>
     <section id="alertBanner" class="banner hidden"></section>
 
-    <main class="container">
-      <section id="loginView" class="panel auth-panel">
-        <h2>Secure Login</h2>
-        <p class="muted">Sign in as Admin or Judge.</p>
-        <form id="loginForm" class="form-grid">
-          <label>
-            Name
-            <input id="nameInput" name="name" required autocomplete="username" />
-          </label>
-          <label>
-            Password
-            <input id="passwordInput" name="password" type="password" required autocomplete="current-password" />
-          </label>
+    <!-- ========== LOGIN LANDING ========== -->
+    <div id="landingExtras">
+      <div class="top-left-branding">
+        <p class="eyebrow">Offline LAN Portal</p>
+        <h1>Multiversal Evaluation Matrix</h1>
+        <p class="sub-tag">&ldquo;Every great engineer was once just a prototype.&rdquo;</p>
+      </div>
+
+      <!-- Vertical Side Text -->
+      <div class="side-text side-left">SCANNING <b>MULTIVERSAL</b> ANOMALIES &bull; SECTOR-721 &bull; ENGINEERING PROTOCOL ACTIVE</div>
+      <div class="side-text side-right">CANON EVENT: <b>JUDGING</b> IN PROGRESS &bull; MULTIVERSE SYNC: STABLE</div>
+
+      <!-- Quotes — engineering + spiderman mashups -->
+      <span class="spider-quote q1">&ldquo;With great power comes great responsibility &hellip; to judge fairly.&rdquo;</span>
+      <span class="spider-quote q2">&ldquo;A web is only as strong as its weakest thread &mdash; just like your code.&rdquo;</span>
+      <span class="spider-quote q3">&ldquo;The hardest bugs require the strongest engineers.&rdquo;</span>
+      <span class="spider-quote q4">&ldquo;It&rsquo;s a leap of faith. That&rsquo;s all it is, Miles.&rdquo;</span>
+      <span class="spider-quote q5">&ldquo;Every Spider-Person started with a prototype.&rdquo;</span>
+      <span class="spider-quote q6">&ldquo;Innovation is my superpower. What&rsquo;s yours?&rdquo;</span>
+
+      <!-- Corner decorative badges -->
+      <div class="corner-badge top-right-badge">
+        <span class="badge-icon">&#x1F578;</span>
+        <span>WEB-001<br><small>Judging Node</small></span>
+      </div>
+      <div class="corner-badge bottom-left-badge">
+        <span class="badge-icon">&#x2699;</span>
+        <span>MAKEATHON<br><small>Build &bull; Break &bull; Repeat</small></span>
+      </div>
+
+      <!-- Decorative circuit lines -->
+      <div class="deco-line deco-line-1"></div>
+      <div class="deco-line deco-line-2"></div>
+    </div>
+
+    <!-- ========== CENTERED LOGIN ========== -->
+    <main class="landing-hero" id="loginWrapper">
+      <section id="loginView" class="auth-panel">
+        <h2>Enter the Verse</h2>
+        <p class="muted" style="text-align:center;margin-bottom:2rem;">Identity Verification Required</p>
+        <form id="loginForm">
+          <div class="form-group">
+            <label for="nameInput">Username</label>
+            <input id="nameInput" name="name" required autocomplete="username" placeholder="Your alias..." />
+          </div>
+          <div class="form-group">
+            <label for="passwordInput">Password</label>
+            <input id="passwordInput" name="password" type="password" required autocomplete="current-password" placeholder="••••••••" />
+          </div>
           <button class="btn btn-primary" type="submit">Login</button>
         </form>
+        <p class="muted" style="text-align:center;margin-top:1.25rem;font-size:0.7rem;opacity:0.6;">&ldquo;The real superpower is showing up.&rdquo;</p>
       </section>
+    </main>
 
-      <section id="judgeView" class="judge-layout hidden">
+    <!-- ========== DASHBOARD SHELL ========== -->
+    <header class="topbar hidden" id="sessionActions">
+      <div class="brand">
+        <i data-lucide="hexagon" style="color:var(--primary);width:28px;height:28px;"></i>
+        <h1 id="pageTitle">Spider-Verse Portal</h1>
+      </div>
+      <div class="session-actions">
+        <span id="userNamePill" class="pill"><i data-lucide="user"></i><span class="val"></span></span>
+        <button id="logoutBtn" class="btn btn-danger" type="button">Leave Verse</button>
+      </div>
+    </header>
+
+    <div class="container hidden" id="mainContent">
+
+      <!-- ===== JUDGE VIEW ===== -->
+      <section id="judgeView" class="hidden">
         <section class="panel judge-sidebar">
           <div class="section-head">
             <h2>Assigned Teams</h2>
             <span id="teamCount" class="muted"></span>
           </div>
-          <div class="form-inline">
+          <div style="display:flex;gap:0.75rem;align-items:center;margin-bottom:1rem;">
+            <label style="margin:0;">Round</label>
             <select id="judgeRoundSelect"></select>
-            <button id="refreshTeamsBtn" class="btn btn-secondary" type="button">Refresh Teams</button>
+            <button id="refreshTeamsBtn" class="btn btn-secondary" type="button">Refresh</button>
           </div>
           <div id="teamsGrid" class="teams-grid"></div>
         </section>
 
-        <section id="evaluationPanel" class="panel hidden">
+        <section id="evaluationPanel" class="panel hidden" style="margin-top:2rem;">
           <div class="section-head">
             <h2 id="evalTitle">Evaluation</h2>
             <span id="evalStatusBadge" class="status-badge"></span>
           </div>
           <p id="deadlineText" class="muted"></p>
-
           <div class="team-content">
             <h3>Problem Statement</h3>
             <p id="problemText" class="content-box"></p>
             <h3>Expected Solution</h3>
             <p id="solutionText" class="content-box"></p>
           </div>
-
           <div>
             <h3>Criteria Scores</h3>
             <div id="criteriaGrid" class="criteria-grid"></div>
           </div>
-
-          <div>
+          <div style="margin-top:1.5rem;">
             <h3>Detailed Remarks</h3>
-            <textarea id="remarksInput" rows="8" placeholder="Add comprehensive technical and qualitative feedback"></textarea>
+            <textarea id="remarksInput" rows="6" placeholder="Add comprehensive technical and qualitative feedback"></textarea>
           </div>
-
           <div class="eval-actions">
             <span id="saveState" class="muted"></span>
             <div class="action-group">
@@ -87,70 +129,54 @@
         </section>
       </section>
 
+      <!-- ===== ADMIN VIEW ===== -->
       <section id="adminView" class="hidden">
-        <section class="panel admin-tabs-wrap">
-          <div class="section-head">
-            <div class="tab-list" id="adminTabList">
-              <button class="tab-btn active" data-tab="overview" type="button">Overview</button>
-              <button class="tab-btn" data-tab="rounds" type="button">Rounds</button>
-              <button class="tab-btn" data-tab="judges" type="button">Judges</button>
-              <button class="tab-btn" data-tab="teams" type="button">Teams</button>
-              <button class="tab-btn" data-tab="criteria" type="button">Criteria</button>
-              <button class="tab-btn" data-tab="assignments" type="button">Assignments</button>
-              <button class="tab-btn" data-tab="scores" type="button">Scores</button>
-              <button class="tab-btn" data-tab="rankings" type="button">Rankings</button>
-              <button class="tab-btn" data-tab="settings" type="button">Settings</button>
-            </div>
-            <div class="form-inline">
-              <label class="muted">Active Round</label>
-              <select id="adminRoundSelect"></select>
-            </div>
+        <section class="panel" style="padding:1rem;">
+          <div id="adminTabList" class="admin-tabs-wrap">
+            <button class="tab-btn active" data-tab="overview" type="button">Overview</button>
+            <button class="tab-btn" data-tab="rounds" type="button">Rounds</button>
+            <button class="tab-btn" data-tab="judges" type="button">Judges</button>
+            <button class="tab-btn" data-tab="teams" type="button">Teams</button>
+            <button class="tab-btn" data-tab="criteria" type="button">Criteria</button>
+            <button class="tab-btn" data-tab="assignments" type="button">Assignments</button>
+            <button class="tab-btn" data-tab="scores" type="button">Scores</button>
+            <button class="tab-btn" data-tab="rankings" type="button">Rankings</button>
+            <button class="tab-btn" data-tab="settings" type="button">Settings</button>
+          </div>
+          <div style="margin-top:1rem;display:flex;gap:0.75rem;align-items:center;">
+            <label style="margin:0;">Active Round</label>
+            <select id="adminRoundSelect"></select>
           </div>
         </section>
 
+        <!-- Overview Tab -->
         <section id="tab-overview" class="panel admin-tab-panel">
           <div class="section-head">
-            <h2>Live Dashboard</h2>
-            <button id="refreshDashboardBtn" class="btn btn-secondary" type="button">Refresh</button>
+            <h2>Multiversal Stats</h2>
+            <button id="refreshDashboardBtn" class="btn btn-secondary" type="button"><i data-lucide="refresh-cw"></i> Sync Reality</button>
           </div>
+          <p class="muted" style="margin-bottom:1rem;font-style:italic;">&ldquo;Every Spider-Man has a canon event. This is yours.&rdquo;</p>
           <div class="stats-grid" id="statsGrid"></div>
-          <h3>Top Rankings</h3>
+          <h3 style="margin-top:2rem;">Top Rankings</h3>
           <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Rank</th>
-                  <th>Team</th>
-                  <th>Avg %</th>
-                  <th>Submitted Judges</th>
-                </tr>
-              </thead>
-              <tbody id="overviewRankingBody"></tbody>
-            </table>
+            <table><thead><tr><th>Rank</th><th>Team</th><th>Category</th><th>Avg %</th><th>Judges</th></tr></thead>
+            <tbody id="overviewRankingBody"></tbody></table>
           </div>
         </section>
 
+        <!-- Rounds Tab -->
         <section id="tab-rounds" class="panel admin-tab-panel hidden">
           <h2>Rounds</h2>
           <form id="roundCreateForm" class="form-inline">
-            <input id="roundCreateName" placeholder="Round name (e.g. Round 2 - Midnight)" required />
-            <input id="roundCreateSequence" type="number" placeholder="Sequence" required />
+            <input id="roundCreateName" placeholder="Round name" required />
+            <input id="roundCreateSequence" type="number" min="1" placeholder="Seq" required style="width:80px" />
             <button class="btn btn-primary" type="submit">Add Round</button>
           </form>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Sequence</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="roundsTableBody"></tbody>
-            </table>
-          </div>
+          <div class="table-wrap"><table><thead><tr><th>Name</th><th>Sequence</th><th>Actions</th></tr></thead>
+          <tbody id="roundsTableBody"></tbody></table></div>
         </section>
 
+        <!-- Judges Tab -->
         <section id="tab-judges" class="panel admin-tab-panel hidden">
           <h2>Judges</h2>
           <form id="judgeCreateForm" class="form-inline">
@@ -158,125 +184,112 @@
             <input id="judgeCreatePassword" placeholder="Password" required />
             <button class="btn btn-primary" type="submit">Add Judge</button>
           </form>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Assigned Teams (Active Round)</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="judgesTableBody"></tbody>
-            </table>
-          </div>
+          <div class="table-wrap"><table><thead><tr><th>Name</th><th>Assigned Teams</th><th>Actions</th></tr></thead>
+          <tbody id="judgesTableBody"></tbody></table></div>
         </section>
 
+        <!-- Teams Tab — with search bar and category filter -->
         <section id="tab-teams" class="panel admin-tab-panel hidden">
-          <h2>Teams</h2>
-          <form id="teamCreateForm" class="form-grid">
+          <div class="section-head">
+            <h2>Teams Registry</h2>
+            <p class="muted" style="font-style:italic;">&ldquo;The web connects everything &mdash; just like good system architecture.&rdquo;</p>
+          </div>
+
+          <!-- Search & Filter Bar -->
+          <div class="teams-toolbar">
+            <div class="search-box">
+              <i data-lucide="search" style="width:16px;color:var(--text-muted);"></i>
+              <input type="text" id="teamSearchInput" placeholder="Search teams by name or PS ID..." />
+            </div>
+            <div class="category-filters">
+              <button class="cat-filter-btn active" data-cat="all" type="button">All</button>
+              <button class="cat-filter-btn" data-cat="HW" type="button">⚙ Hardware</button>
+              <button class="cat-filter-btn" data-cat="SW" type="button">💻 Software</button>
+            </div>
+          </div>
+
+          <form id="teamCreateForm" class="form-grid" style="grid-template-columns:1fr 1fr;">
             <label>Team Name <input id="teamCreateName" required /></label>
-            <label>Problem Statement <textarea id="teamCreateProblem" rows="3"></textarea></label>
-            <label>Expected Solution <textarea id="teamCreateExpected" rows="3"></textarea></label>
-            <button class="btn btn-primary" type="submit">Add Team</button>
+            <label>PS ID <input id="teamCreatePsId" placeholder="e.g. HW0101" /></label>
+            <label>Category
+              <select id="teamCreateCategory"><option value="HW">Hardware</option><option value="SW">Software</option></select>
+            </label>
+            <label>Problem Statement <textarea id="teamCreateProblem" rows="2"></textarea></label>
+            <label>Expected Solution <textarea id="teamCreateExpected" rows="2"></textarea></label>
+            <button class="btn btn-primary" type="submit" style="grid-column:1/-1;">Add Team</button>
           </form>
+
           <div class="table-wrap">
             <table>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Assigned Judges (Active Round)</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
+              <thead><tr><th>Name</th><th>PS ID</th><th>Category</th><th>Assigned Judges</th><th>Performance</th><th>Actions</th></tr></thead>
               <tbody id="teamsTableBody"></tbody>
             </table>
           </div>
         </section>
 
+        <!-- Criteria Tab -->
         <section id="tab-criteria" class="panel admin-tab-panel hidden">
-          <h2>Round Criteria</h2>
+          <h2>Evaluation Criteria</h2>
           <form id="criteriaCreateForm" class="form-inline">
             <input id="criteriaCreateName" placeholder="Criterion name" required />
-            <input id="criteriaCreateMax" type="number" min="1" max="10" step="0.1" placeholder="Max score (<=10)" required />
+            <input id="criteriaCreateMax" type="number" min="1" step="0.1" placeholder="Max score" required />
             <button class="btn btn-primary" type="submit">Add Criterion</button>
           </form>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Max Score</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="criteriaTableBody"></tbody>
-            </table>
-          </div>
+          <div class="table-wrap"><table><thead><tr><th>Name</th><th>Max Score</th><th>Actions</th></tr></thead>
+          <tbody id="criteriaTableBody"></tbody></table></div>
         </section>
 
+        <!-- Assignments Tab -->
         <section id="tab-assignments" class="panel admin-tab-panel hidden">
-          <h2>Judge-Team Assignments (Per Round)</h2>
-          <div class="form-grid">
-            <label>
-              Judge
-              <select id="assignmentJudgeSelect"></select>
-            </label>
-            <div>
-              <p class="muted">Assigned Teams for Active Round</p>
-              <div id="assignmentTeamsList" class="checkbox-grid"></div>
-            </div>
-            <button id="saveAssignmentBtn" class="btn btn-primary" type="button">Save Assignments</button>
+          <h2>Judge-Team Assignments</h2>
+          <div style="margin-bottom:1.5rem;">
+            <label>Judge</label>
+            <select id="assignmentJudgeSelect"></select>
           </div>
+          <div id="assignmentTeamsList" class="checkbox-grid" style="display:none;"></div>
+          <div class="track-boxes">
+            <div class="track-box track-hw">
+              <h3><i data-lucide="cpu"></i> Hardware Track</h3>
+              <div id="assignmentTeamsListHW" class="checkbox-grid"></div>
+            </div>
+            <div class="track-box track-sw">
+              <h3><i data-lucide="code"></i> Software Track</h3>
+              <div id="assignmentTeamsListSW" class="checkbox-grid"></div>
+            </div>
+          </div>
+          <button id="saveAssignmentBtn" class="btn btn-primary" type="button" style="margin-top:1.5rem;">Save Assignments</button>
         </section>
 
+        <!-- Scores Tab -->
         <section id="tab-scores" class="panel admin-tab-panel hidden">
           <div class="section-head">
-            <h2>Final Scores (Active Round)</h2>
+            <h2>All Scores</h2>
             <button id="refreshScoresBtn" class="btn btn-secondary" type="button">Refresh</button>
           </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Team</th>
-                  <th>Judge</th>
-                  <th>Criterion</th>
-                  <th>Score</th>
-                  <th>Submitted</th>
-                </tr>
-              </thead>
-              <tbody id="scoresTableBody"></tbody>
-            </table>
-          </div>
+          <div class="table-wrap"><table><thead><tr><th>Team</th><th>Judge</th><th>Criterion</th><th>Score</th><th>Submitted</th></tr></thead>
+          <tbody id="scoresTableBody"></tbody></table></div>
         </section>
 
+        <!-- Rankings Tab -->
         <section id="tab-rankings" class="panel admin-tab-panel hidden">
           <div class="section-head">
-            <h2>Rankings (Active Round)</h2>
+            <h2>Rankings</h2>
             <div class="action-group">
+              <select id="rankingRoundSelect" style="min-width:140px;"></select>
+              <select id="rankingCategorySelect" style="min-width:120px;">
+                <option value="">All</option><option value="HW">Hardware</option><option value="SW">Software</option>
+              </select>
               <button id="refreshRankingsBtn" class="btn btn-secondary" type="button">Refresh</button>
-              <a class="btn btn-secondary" href="/api/admin/export/csv" target="_blank" rel="noopener">Export CSV</a>
+              <button id="exportRankingsBtn" class="btn btn-secondary" type="button">Export CSV</button>
             </div>
           </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Rank</th>
-                  <th>Team</th>
-                  <th>Avg Total</th>
-                  <th>Avg %</th>
-                  <th>Override</th>
-                </tr>
-              </thead>
-              <tbody id="rankingsTableBody"></tbody>
-            </table>
-          </div>
+          <div class="table-wrap"><table><thead><tr><th>Rank</th><th>Team</th><th>Category</th><th id="rankColAvgTotal">Avg Score</th><th>Judges</th><th>Override</th></tr></thead>
+          <tbody id="rankingsTableBody"></tbody></table></div>
         </section>
 
+        <!-- Settings Tab -->
         <section id="tab-settings" class="panel admin-tab-panel hidden">
-          <h2>Submission Deadline (Global)</h2>
+          <h2>Submission Deadline</h2>
           <p class="muted">Judges can edit scores until this deadline.</p>
           <div class="form-inline">
             <input id="deadlineInput" type="datetime-local" />
@@ -285,10 +298,67 @@
           </div>
         </section>
       </section>
-    </main>
-  </div>
+    </div>
 
-  <script src="/static/js/app.js"></script>
+    <!-- ===== MODALS ===== -->
+    <div id="remarksModal" class="modal-overlay hidden">
+      <div class="modal-content">
+        <div class="section-head"><h2 id="modalTeamName">Team Remarks</h2><button class="btn btn-secondary" onclick="document.getElementById('remarksModal').classList.add('hidden')">Close</button></div>
+        <div id="modalRemarksList"></div>
+      </div>
+    </div>
+    <div id="teamInfoModal" class="modal-overlay hidden">
+      <div class="modal-content" style="max-width: 1000px; width: 95%;">
+        <div class="section-head">
+          <h2 id="infoTeamName">Team Info</h2>
+          <button class="btn btn-secondary" onclick="document.getElementById('teamInfoModal').classList.add('hidden')">Close</button>
+        </div>
+        
+        <div class="form-grid" style="grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem;">
+          <!-- Left Column: Basic Info -->
+          <div>
+            <div style="margin-bottom: 1.5rem;">
+              <p style="margin-bottom: 0.5rem;"><strong>PS ID:</strong> <span id="infoPsId" class="muted"></span></p>
+              <p><strong>Category:</strong> <span id="infoCategory"></span></p>
+            </div>
+            
+            <h3 style="font-size: 1rem; margin-bottom: 0.5rem; color: var(--secondary);">Problem Statement</h3>
+            <p id="infoProblem" class="content-box" style="margin-bottom: 1.5rem; max-height: 200px; overflow-y: auto;"></p>
+            
+            <h3 style="font-size: 1rem; margin-bottom: 0.5rem; color: var(--secondary);">Expected Solution</h3>
+            <p id="infoExpected" class="content-box" style="max-height: 200px; overflow-y: auto;"></p>
+          </div>
+          
+          <!-- Right Column: Performance Breakdown -->
+          <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+            <div>
+              <h3 style="font-size: 1rem; margin-bottom: 0.5rem; color: var(--primary);">Detailed Scores</h3>
+              <div class="table-wrap" style="max-height: 350px; overflow-y: auto;">
+                <table style="font-size: 0.85rem;">
+                  <thead>
+                    <tr>
+                      <th>Round</th>
+                      <th>Judge</th>
+                      <th>Criterion</th>
+                      <th>Score</th>
+                    </tr>
+                  </thead>
+                  <tbody id="infoScoresBody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div>
+              <h3 style="font-size: 1rem; margin-bottom: 0.5rem; color: var(--accent);">Judge Remarks</h3>
+              <div id="infoRemarksList" style="max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem;">
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="/static/js/spiderman.js"></script>
+  <script>lucide.createIcons();</script>
 </body>
 </html>
-

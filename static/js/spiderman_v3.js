@@ -1,5 +1,6 @@
 (function () {
   "use strict";
+  console.log("Spider-Verse Judging Matrix v2.2 Loaded");
 
   var state = {
     user: null,
@@ -84,10 +85,28 @@
     scoresTableBody: document.getElementById("scoresTableBody"),
     refreshRankingsBtn: document.getElementById("refreshRankingsBtn"),
     rankingsTableBody: document.getElementById("rankingsTableBody"),
+    rankingRoundSelect: document.getElementById("rankingRoundSelect"),
+    rankingCategorySelect: document.getElementById("rankingCategorySelect"),
+    exportRankingsBtn: document.getElementById("exportRankingsBtn"),
+    rankColAvgTotal: document.getElementById("rankColAvgTotal"),
     deadlineInput: document.getElementById("deadlineInput"),
     saveDeadlineBtn: document.getElementById("saveDeadlineBtn"),
     clearDeadlineBtn: document.getElementById("clearDeadlineBtn"),
+    teamCreatePsId: document.getElementById("teamCreatePsId"),
+    teamCreateCategory: document.getElementById("teamCreateCategory"),
+    assignmentTeamsListHW: document.getElementById("assignmentTeamsListHW"),
+    assignmentTeamsListSW: document.getElementById("assignmentTeamsListSW"),
+    remarksModal: document.getElementById("remarksModal"),
+    modalRemarksList: document.getElementById("modalRemarksList"),
+    modalTeamName: document.getElementById("modalTeamName"),
+    teamInfoModal: document.getElementById("teamInfoModal"),
+    infoTeamName: document.getElementById("infoTeamName"),
+    infoPsId: document.getElementById("infoPsId"),
+    infoCategory: document.getElementById("infoCategory"),
+    infoProblem: document.getElementById("infoProblem"),
+    infoExpected: document.getElementById("infoExpected"),
   };
+
 
   function escapeHtml(value) {
     return String(value == null ? "" : value)
@@ -182,14 +201,30 @@
   }
 
   function showMode(mode) {
+    const isLogin = mode === "login";
     els.loginView.classList.toggle("hidden", mode !== "login");
     els.judgeView.classList.toggle("hidden", mode !== "judge");
     els.adminView.classList.toggle("hidden", mode !== "admin");
-    els.sessionActions.classList.toggle("hidden", mode === "login");
-    if (mode === "judge") els.pageTitle.textContent = "Judge Console";
-    else if (mode === "admin") els.pageTitle.textContent = "Admin Dashboard";
-    else els.pageTitle.textContent = "Hackathon Judging System";
+    
+    // Toggle Landing Page Extras
+    const landingExtras = document.getElementById("landingExtras");
+    const loginWrapper = document.getElementById("loginWrapper");
+    const mainContent = document.getElementById("mainContent");
+    const sessionActions = document.getElementById("sessionActions");
+
+    if (landingExtras) landingExtras.classList.toggle("hidden", !isLogin);
+    if (loginWrapper) loginWrapper.classList.toggle("hidden", !isLogin);
+    if (mainContent) mainContent.classList.toggle("hidden", isLogin);
+    if (sessionActions) sessionActions.classList.toggle("hidden", isLogin);
+
+    if (mode === "judge") {
+        document.getElementById("pageTitle").textContent = "Judge Console";
+    } else if (mode === "admin") {
+        document.getElementById("pageTitle").textContent = "Admin Dashboard";
+    }
+
     if (mode !== "admin") stopAdminAutoRefresh();
+    window.lucide && window.lucide.createIcons();
   }
 
   function statusLabel(status) {
@@ -237,13 +272,27 @@
       return;
     }
     els.teamsGrid.innerHTML = state.judge.teams.map(function (team) {
+      var statusClass = team.is_submitted ? "submitted" : (team.draft_score_count > 0 ? "in_progress" : "not_started");
+      var statusText = team.is_submitted ? "Submitted" : (team.draft_score_count > 0 ? "Draft" : "Pending");
+      var catClass = team.category === "HW" ? "cat-hw" : "cat-sw";
+      
       return "<article class='team-card'>" +
-        "<div class='section-head'><h3>" + escapeHtml(team.name) + "</h3>" +
-        "<span class='status-badge status-" + team.status + "'>" + statusLabel(team.status) + "</span></div>" +
-        "<p>Open scoring form for this team.</p>" +
-        "<button class='btn btn-secondary' data-team-id='" + team.id + "' type='button'>Open</button></article>";
+        "<div class='section-head'>" +
+          "<div>" +
+            "<h3>" + escapeHtml(team.name) + "</h3>" +
+            "<code class='muted' style='font-size:0.75rem;'>" + escapeHtml(team.ps_id) + "</code> " +
+            "<span class='cat-chip " + catClass + "'>" + team.category + "</span>" +
+          "</div>" +
+          "<span class='status-badge status-" + statusClass + "'>" + statusText + "</span>" +
+        "</div>" +
+        "<button class='btn btn-primary' data-team-id='" + team.id + "' type='button' style='width:100%; justify-content:center;'>" +
+          "<i data-lucide='clipboard-check' style='width:16px;'></i> Evaluate" +
+        "</button></article>";
     }).join("");
+    if (window.lucide) window.lucide.createIcons();
   }
+
+
 
   function setJudgeDisabled(disabled) {
     var inputs = els.criteriaGrid.querySelectorAll("input");
@@ -293,9 +342,11 @@
     state.judge.dirty = false;
     setJudgeDisabled(!evaluation.editable);
     setSaveState(evaluation.editable ? "No unsaved changes." : "Editing locked.");
+    if (window.lucide) window.lucide.createIcons();
   }
 
   async function loadJudgeTeams() {
+
     var payload = await api("/api/judge/teams" + roundQuery());
     state.judge.teams = payload.teams || [];
     renderJudgeTeams();
@@ -388,9 +439,12 @@
     }).join("");
     var rows = dashboard.rankings || [];
     els.overviewRankingBody.innerHTML = rows.slice(0, 10).map(function (r) {
-      return "<tr><td>" + r.rank + "</td><td>" + escapeHtml(r.team_name) + "</td><td>" + r.avg_percentage + "%</td><td>" + r.submitted_judges + "</td></tr>";
-    }).join("") || "<tr><td colspan='4'>No ranking data yet.</td></tr>";
+      return "<tr><td>" + r.rank + "</td><td>" + escapeHtml(r.team_name) + "</td><td>" + escapeHtml(r.category || "SW") + "</td><td>" + (r.avg_percentage || 0) + "%</td><td>" + (r.submitted_judges || 0) + "</td></tr>";
+    }).join("") || "<tr><td colspan='5'>No ranking data yet.</td></tr>";
+    if (window.lucide) window.lucide.createIcons();
   }
+
+
 
   async function loadOverview() {
     var dashboard = await api("/api/admin/dashboard" + roundQuery());
@@ -403,7 +457,9 @@
         "<button class='btn btn-secondary' data-action='edit-round' data-id='" + r.id + "' type='button'>Edit</button> " +
         "<button class='btn btn-danger' data-action='delete-round' data-id='" + r.id + "' type='button'>Delete</button></td></tr>";
     }).join("") || "<tr><td colspan='3'>No rounds configured.</td></tr>";
+    if (window.lucide) window.lucide.createIcons();
   }
+
 
   function renderJudges() {
     els.judgesTableBody.innerHTML = state.admin.judges.map(function (j) {
@@ -411,15 +467,28 @@
         "<button class='btn btn-secondary' data-action='edit-judge' data-id='" + j.id + "' type='button'>Edit</button> " +
         "<button class='btn btn-danger' data-action='delete-judge' data-id='" + j.id + "' type='button'>Delete</button></td></tr>";
     }).join("") || "<tr><td colspan='3'>No judges found.</td></tr>";
+    if (window.lucide) window.lucide.createIcons();
   }
+
+
 
   function renderTeamsTable() {
     els.teamsTableBody.innerHTML = state.admin.teams.map(function (t) {
-      return "<tr><td>" + escapeHtml(t.name) + "</td><td>" + t.assigned_judges + "</td><td>" +
-        "<button class='btn btn-secondary' data-action='edit-team' data-id='" + t.id + "' type='button'>Edit</button> " +
-        "<button class='btn btn-danger' data-action='delete-team' data-id='" + t.id + "' type='button'>Delete</button></td></tr>";
-    }).join("") || "<tr><td colspan='3'>No teams found.</td></tr>";
+      var catClass = t.category === "HW" ? "cat-hw" : "cat-sw";
+      var teamNameHtml = "<a href='#' class='team-link' data-action='view-info' data-id='" + t.id + "'>" + escapeHtml(t.name) + "</a>";
+      return "<tr>" +
+        "<td><code class='muted'>" + escapeHtml(t.ps_id || "N/A") + "</code></td>" +
+        "<td><strong>" + teamNameHtml + "</strong></td>" +
+        "<td><span class='cat-chip " + catClass + "'>" + t.category + "</span></td>" +
+        "<td>" + t.assigned_judges + "</td>" +
+        "<td><button class='btn btn-secondary btn-sm' data-action='view-remarks' data-id='" + t.id + "' data-name='" + escapeHtml(t.name) + "' type='button'><i data-lucide='message-square' style='width:14px;'></i> Remarks</button></td>" +
+        "<td>" +
+        "<button class='btn btn-secondary' data-action='edit-team' data-id='" + t.id + "' type='button'><i data-lucide='edit' style='width:14px;'></i></button> " +
+        "<button class='btn btn-danger' data-action='delete-team' data-id='" + t.id + "' type='button'><i data-lucide='trash' style='width:14px;'></i></button></td></tr>";
+    }).join("") || "<tr><td colspan='6'>No multiversal variants found.</td></tr>";
+    if (window.lucide) window.lucide.createIcons();
   }
+
 
   function renderCriteria() {
     els.criteriaTableBody.innerHTML = state.admin.criteria.map(function (c) {
@@ -427,30 +496,53 @@
         "<button class='btn btn-secondary' data-action='edit-criterion' data-id='" + c.id + "' type='button'>Edit</button> " +
         "<button class='btn btn-danger' data-action='delete-criterion' data-id='" + c.id + "' type='button'>Delete</button></td></tr>";
     }).join("") || "<tr><td colspan='3'>No criteria for this round.</td></tr>";
+    if (window.lucide) window.lucide.createIcons();
   }
+
+
 
   function renderAssignmentChecks() {
     var judgeId = Number(els.assignmentJudgeSelect.value || 0);
     var assigned = state.admin.assignmentMap[judgeId] || {};
-    els.assignmentTeamsList.innerHTML = state.admin.teams.map(function (t) {
-      var checked = assigned[t.id] ? "checked" : "";
-      return "<label class='checkbox-item'><input type='checkbox' value='" + t.id + "' " + checked + " /><span>" + escapeHtml(t.name) + "</span></label>";
-    }).join("") || "<p class='muted'>No teams available.</p>";
+    console.log("Rendering assignments for judge:", judgeId, "Teams in state:", state.admin.teams.length);
+    
+    function makeList(filterCat) {
+      var filtered = state.admin.teams.filter(function(t) { return t.category === filterCat; });
+      console.log("Category:", filterCat, "Found:", filtered.length);
+      return filtered.map(function (t) {
+          var checked = assigned[t.id] ? "checked" : "";
+          return "<label class='checkbox-item'><input type='checkbox' value='" + t.id + "' " + checked + " />" +
+            "<span>" + escapeHtml(t.name) + " <small class='muted'>(" + escapeHtml(t.ps_id) + ")</small></span></label>";
+        }).join("") || "<p class='muted'>None</p>";
+    }
+
+    els.assignmentTeamsListHW.innerHTML = makeList("HW");
+    els.assignmentTeamsListSW.innerHTML = makeList("SW");
+    if (window.lucide) window.lucide.createIcons();
   }
 
   function renderRankings() {
+    var isOverall = els.rankingRoundSelect.value === "overall";
+    els.rankColAvgTotal.classList.toggle("hidden", isOverall);
+    
     els.rankingsTableBody.innerHTML = state.admin.rankings.map(function (r) {
       var override = r.override_rank == null ? "" : r.override_rank;
       var reason = r.override_reason || "";
-      return "<tr data-team-id='" + r.team_id + "'><td>" + r.rank + "</td><td>" + escapeHtml(r.team_name) + "</td><td>" + r.avg_total_score + "</td><td>" + r.avg_percentage + "%</td><td>" +
-        "<div class='form-inline'><input data-override-rank value='" + override + "' placeholder='Rank' style='max-width:90px' />" +
-        "<input data-override-reason value='" + escapeHtml(reason) + "' placeholder='Reason' />" +
-        "<button class='btn btn-secondary' data-action='save-override' type='button'>Save</button>" +
-        "<button class='btn btn-danger' data-action='clear-override' type='button'>Clear</button></div></td></tr>";
-    }).join("") || "<tr><td colspan='5'>No rankings available.</td></tr>";
+      var category = escapeHtml(r.category || "SW");
+      
+      var scoreTd = isOverall ? "" : ("<td>" + r.avg_total_score + "</td>");
+      
+      return "<tr data-team-id='" + r.team_id + "'><td>" + r.rank + "</td><td>" + escapeHtml(r.team_name) + "</td><td>" + category + "</td>" + scoreTd + "<td>" + r.avg_percentage + "%</td><td>" +
+        "<div class='form-inline'><input data-override-rank value='" + override + "' placeholder='Rank' style='max-width:90px' " + (isOverall ? "disabled" : "") + " />" +
+        "<input data-override-reason value='" + escapeHtml(reason) + "' placeholder='Reason' " + (isOverall ? "disabled" : "") + " />" +
+        "<button class='btn btn-secondary' data-action='save-override' type='button' " + (isOverall ? "disabled" : "") + ">Save</button>" +
+        "<button class='btn btn-danger' data-action='clear-override' type='button' " + (isOverall ? "disabled" : "") + ">Clear</button></div></td></tr>";
+    }).join("") || "<tr><td colspan='6'>No rankings available.</td></tr>";
+    if (window.lucide) window.lucide.createIcons();
   }
 
   function isoToLocalInput(iso) {
+
     if (!iso) return "";
     var d = new Date(iso);
     if (isNaN(d.getTime())) return "";
@@ -491,21 +583,33 @@
     els.assignmentJudgeSelect.innerHTML = state.admin.judges.map(function (j) {
       return "<option value='" + j.id + "'>" + escapeHtml(j.name) + "</option>";
     }).join("");
+    if (state.admin.judges.length > 0 && !els.assignmentJudgeSelect.value) {
+      els.assignmentJudgeSelect.selectedIndex = 0;
+    }
     renderAssignmentChecks();
   }
 
   async function loadScores() {
     var rows = await api("/api/admin/scores" + roundQuery());
     els.scoresTableBody.innerHTML = rows.map(function (r) {
-      return "<tr><td>" + escapeHtml(r.team_name) + "</td><td>" + escapeHtml(r.judge_name) + "</td><td>" + escapeHtml(r.criterion_name) + "</td><td>" + r.score + " / " + r.max_score + "</td><td>" + (r.is_submitted ? "Yes" : "No") + "</td></tr>";
-    }).join("") || "<tr><td colspan='5'>No scores yet.</td></tr>";
+      return "<tr><td>" + escapeHtml(r.team_name) + "</td><td>" + escapeHtml(r.team_category || "SW") + "</td><td>" + escapeHtml(r.judge_name) + "</td><td>" + escapeHtml(r.criterion_name) + "</td><td>" + r.score + " / " + r.max_score + "</td><td>" + (r.is_submitted ? "Yes" : "No") + "</td><td><small>" + escapeHtml(r.remarks) + "</small></td></tr>";
+    }).join("") || "<tr><td colspan='7'>No scores yet.</td></tr>";
+    if (window.lucide) window.lucide.createIcons();
   }
 
   async function loadRankings() {
-    var payload = await api("/api/admin/rankings" + roundQuery());
+
+    var rid = els.rankingRoundSelect.value === "active" ? state.activeRoundId : "overall";
+    var cat = els.rankingCategorySelect.value;
+    var query = "?round_id=" + rid;
+    if (cat !== "All") query += "&category=" + cat;
+    
+    var payload = await api("/api/admin/rankings" + query);
     state.admin.rankings = payload.rows || [];
+    els.exportRankingsBtn.href = "/api/admin/export/csv" + query;
     renderRankings();
   }
+
 
   async function loadDeadline() {
     var payload = await api("/api/admin/settings/submission-deadline");
@@ -576,8 +680,11 @@
       try {
         state.user = await login(els.nameInput.value.trim(), els.passwordInput.value);
         await loadRounds();
-        els.userNamePill.textContent = state.user.name + " (" + state.user.role + ")";
+        var pillSpan = els.userNamePill.querySelector("span");
+        if (pillSpan) pillSpan.textContent = state.user.name + " (" + state.user.role + ")";
+        else els.userNamePill.textContent = state.user.name + " (" + state.user.role + ")";
         if (state.user.role === "judge") {
+
           showMode("judge");
           await loadJudgeTeams();
         } else if (state.user.role === "admin") {
@@ -736,6 +843,8 @@
           method: "POST",
           body: JSON.stringify({
             name: els.teamCreateName.value.trim(),
+            ps_id: els.teamCreatePsId.value.trim(),
+            category: els.teamCreateCategory.value,
             problem_statement: els.teamCreateProblem.value,
             expected_solution: els.teamCreateExpected.value,
           }),
@@ -750,6 +859,31 @@
       var id = Number(btn.getAttribute("data-id"));
       var action = btn.getAttribute("data-action");
       try {
+        if (action === "view-remarks") {
+          var tname = btn.getAttribute("data-name");
+          els.modalTeamName.textContent = "Variant Remarks: " + tname;
+          els.modalRemarksList.innerHTML = "<p class='muted'>Syncing with the Spider-Verse...</p>";
+          els.remarksModal.classList.remove("hidden");
+          var remarks = await api("/api/admin/teams/" + id + "/remarks");
+          els.modalRemarksList.innerHTML = remarks.map(function(r) {
+            return "<div class='remark-item'>" +
+              "<div class='remark-meta'><strong>" + escapeHtml(r.judge_name) + "</strong><span class='muted'>" + escapeHtml(r.round_name) + "</span></div>" +
+              "<p class='remark-text'>" + (escapeHtml(r.remarks) || "Canon signal lost (No comment).") + "</p>" +
+              "</div>";
+          }).join("") || "<p class='muted' style='padding: 2rem; text-align: center;'>No multi-versal echoes found.</p>";
+        }
+        if (action === "view-info") {
+          var team = null;
+          for (var i = 0; i < state.admin.teams.length; i += 1) if (state.admin.teams[i].id === id) team = state.admin.teams[i];
+          if (team) {
+             els.infoTeamName.textContent = team.name;
+             els.infoPsId.textContent = team.ps_id || "N/A";
+             els.infoCategory.innerHTML = "<span class='cat-chip " + (team.category === "HW" ? "cat-hw" : "cat-sw") + "'>" + team.category + "</span>";
+             els.infoProblem.textContent = team.problem_statement || "No description provided.";
+             els.infoExpected.textContent = team.expected_solution || "No expected solution provided.";
+             els.teamInfoModal.classList.remove("hidden");
+          }
+        }
         if (action === "delete-team") {
           if (!window.confirm("Delete this team?")) return;
           await api("/api/admin/teams/" + id, { method: "DELETE" });
@@ -818,7 +952,7 @@
     els.assignmentJudgeSelect.addEventListener("change", renderAssignmentChecks);
     els.saveAssignmentBtn.addEventListener("click", async function () {
       var judgeId = Number(els.assignmentJudgeSelect.value || 0);
-      var boxes = els.assignmentTeamsList.querySelectorAll("input[type='checkbox']");
+      var boxes = document.querySelectorAll(".track-boxes input[type='checkbox']");
       var teamIds = [];
       for (var i = 0; i < boxes.length; i += 1) if (boxes[i].checked) teamIds.push(Number(boxes[i].value));
       try {
@@ -838,6 +972,13 @@
     els.refreshRankingsBtn.addEventListener("click", function () {
       loadRankings().catch(function (error) { showAlert(error.message); });
     });
+    els.rankingRoundSelect.addEventListener("change", function () {
+      loadRankings().catch(function (error) { showAlert(error.message); });
+    });
+    els.rankingCategorySelect.addEventListener("change", function () {
+      loadRankings().catch(function (error) { showAlert(error.message); });
+    });
+
     els.rankingsTableBody.addEventListener("click", async function (event) {
       var btn = event.target.closest("button[data-action]");
       if (!btn) return;
@@ -892,8 +1033,11 @@
     try {
       state.user = await api("/api/auth/me");
       await loadRounds();
-      els.userNamePill.textContent = state.user.name + " (" + state.user.role + ")";
+      var pillSpan = els.userNamePill.querySelector("span");
+      if (pillSpan) pillSpan.textContent = state.user.name + " (" + state.user.role + ")";
+      else els.userNamePill.textContent = state.user.name + " (" + state.user.role + ")";
       if (state.user.role === "admin") {
+
         showMode("admin");
         switchAdminTab("overview");
         startAdminAutoRefresh();

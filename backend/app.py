@@ -13,6 +13,7 @@ from db import close_db, get_db, init_db, transaction
 
 def create_app():
     app = Flask(__name__, template_folder="../templates", static_folder="../static")
+    # Triggering reload for Spider-Verse Matrix v2.1
     app.config.from_object(Config)
     app.teardown_appcontext(close_db)
 
@@ -371,87 +372,148 @@ def _submit_round_final_evaluation(db, judge_id, team_id, round_id, scores_paylo
     return True, [], False
 
 
-def _build_rankings(db, round_id):
-    first_criterion_row = db.execute(
-        "SELECT id FROM round_criteria WHERE round_id = ? ORDER BY id LIMIT 1",
-        (round_id,),
-    ).fetchone()
-    first_criterion_id = first_criterion_row["id"] if first_criterion_row else None
+def _build_rankings(db, round_id, category=None):
+    # Base params for the query
+    
+    # Category filter where clause
+    category_filter = ""
+    if category in ["HW", "SW"]:
+        category_filter = "AND t.category = ?"
 
-    params = [round_id, round_id]
-    secondary_expr = "0"
-    if first_criterion_id is not None:
-        secondary_expr = """
-            (
-                SELECT AVG(fs2.score)
-                FROM round_final_scores fs2
-                JOIN round_final_submissions sub2
-                    ON sub2.judge_id = fs2.judge_id
-                    AND sub2.team_id = fs2.team_id
-                    AND sub2.round_id = fs2.round_id
-                WHERE fs2.round_id = ? AND fs2.team_id = t.id AND fs2.criterion_id = ?
+    if round_id is not None:
+        # Standard round rankings
+        first_criterion_row = db.execute(
+            "SELECT id FROM round_criteria WHERE round_id = ? ORDER BY id LIMIT 1",
+            (round_id,),
+        ).fetchone()
+        first_criterion_id = first_criterion_row["id"] if first_criterion_row else None
+
+        secondary_expr = "0"
+        query_params = [round_id, round_id]
+        
+        if first_criterion_id is not None:
+            secondary_expr = """
+                (
+                    SELECT AVG(fs2.score)
+                    FROM round_final_scores fs2
+                    JOIN round_final_submissions sub2
+                        ON sub2.judge_id = fs2.judge_id
+                        AND sub2.team_id = fs2.team_id
+                        AND sub2.round_id = fs2.round_id
+                    WHERE fs2.round_id = ? AND fs2.team_id = t.id AND fs2.criterion_id = ?
+                )
+            """
+            query_params.extend([round_id, first_criterion_id])
+        
+        query_params.append(round_id) # for override join
+        if category in ["HW", "SW"]:
+            query_params.append(category)
+
+        rows = db.execute(
+            f"""
+            WITH criteria_totals AS (
+                SELECT SUM(max_score) AS max_total
+                FROM round_criteria
+                WHERE round_id = ?
+            ),
+            judge_totals AS (
+                SELECT
+                    s.team_id,
+                    s.judge_id,
+                    SUM(s.score) AS total_score
+                FROM round_final_scores s
+                JOIN round_final_submissions sub
+                    ON sub.judge_id = s.judge_id
+                    AND sub.team_id = s.team_id
+                    AND sub.round_id = s.round_id
+                WHERE s.round_id = ?
+                GROUP BY s.team_id, s.judge_id
             )
-        """
-        params.extend([round_id, first_criterion_id])
-
-    rows = db.execute(
-        f"""
-        WITH criteria_totals AS (
-            SELECT SUM(max_score) AS max_total
-            FROM round_criteria
-            WHERE round_id = ?
-        ),
-        judge_totals AS (
             SELECT
-                s.team_id,
-                s.judge_id,
-                SUM(s.score) AS total_score
-            FROM round_final_scores s
-            JOIN round_final_submissions sub
-                ON sub.judge_id = s.judge_id
-                AND sub.team_id = s.team_id
-                AND sub.round_id = s.round_id
-            WHERE s.round_id = ?
-            GROUP BY s.team_id, s.judge_id
-        )
-        SELECT
-            t.id AS team_id,
-            t.name AS team_name,
-            ROUND(COALESCE(AVG(jt.total_score), 0), 4) AS avg_total_score,
-            ROUND(
-                CASE
-                    WHEN (SELECT max_total FROM criteria_totals) > 0
-                    THEN COALESCE(AVG(jt.total_score), 0) * 100.0 / (SELECT max_total FROM criteria_totals)
-                    ELSE 0
-                END,
-                4
-            ) AS avg_percentage,
-            ROUND(COALESCE({secondary_expr}, 0), 4) AS secondary_score,
-            COUNT(DISTINCT jt.judge_id) AS submitted_judges,
-            ro.override_rank,
-            ro.reason AS override_reason
-        FROM teams t
-        LEFT JOIN judge_totals jt ON jt.team_id = t.id
-        LEFT JOIN round_ranking_overrides ro
-            ON ro.team_id = t.id AND ro.round_id = ?
-        GROUP BY t.id, t.name, ro.override_rank, ro.reason
-        ORDER BY avg_percentage DESC, secondary_score DESC, team_name ASC
-        """,
-        tuple(params + [round_id]),
-    ).fetchall()
+                t.id AS team_id,
+                t.name AS team_name,
+                t.category,
+                ROUND(COALESCE(AVG(jt.total_score), 0), 4) AS avg_total_score,
+                ROUND(
+                    CASE
+                        WHEN (SELECT max_total FROM criteria_totals) > 0
+                        THEN COALESCE(AVG(jt.total_score), 0) * 100.0 / (SELECT max_total FROM criteria_totals)
+                        ELSE 0
+                    END,
+                    4
+                ) AS avg_percentage,
+                ROUND(COALESCE({secondary_expr}, 0), 4) AS secondary_score,
+                COUNT(DISTINCT jt.judge_id) AS submitted_judges,
+                ro.override_rank,
+                ro.reason AS override_reason
+            FROM teams t
+            LEFT JOIN judge_totals jt ON jt.team_id = t.id
+            LEFT JOIN round_ranking_overrides ro
+                ON ro.team_id = t.id AND ro.round_id = ?
+            WHERE 1=1 {category_filter}
+            GROUP BY t.id, t.name, t.category, ro.override_rank, ro.reason
+            ORDER BY avg_percentage DESC, secondary_score DESC, team_name ASC
+            """,
+            tuple(query_params),
+        ).fetchall()
+    else:
+        # Overall rankings (Aggregate across all rounds)
+        query_params = []
+        if category in ["HW", "SW"]:
+            query_params.append(category)
+
+        rows = db.execute(
+            f"""
+            WITH round_percentages AS (
+                SELECT
+                    t.id AS team_id,
+                    r.id AS round_id,
+                    SUM(fs.score) * 100.0 / (SELECT SUM(max_score) FROM round_criteria WHERE round_id = r.id) AS percentage
+                FROM teams t
+                JOIN round_final_scores fs ON fs.team_id = t.id
+                JOIN rounds r ON r.id = fs.round_id
+                JOIN round_final_submissions sub 
+                    ON sub.team_id = fs.team_id 
+                    AND sub.judge_id = fs.judge_id 
+                    AND sub.round_id = fs.round_id
+                GROUP BY t.id, r.id, fs.judge_id
+            ),
+            team_round_avgs AS (
+                SELECT team_id, round_id, AVG(percentage) as round_avg
+                FROM round_percentages
+                GROUP BY team_id, round_id
+            )
+            SELECT
+                t.id AS team_id,
+                t.name AS team_name,
+                t.category,
+                0 AS avg_total_score,
+                ROUND(AVG(tra.round_avg), 4) AS avg_percentage,
+                0 AS secondary_score,
+                (SELECT COUNT(DISTINCT judge_id) FROM round_final_submissions WHERE team_id = t.id) AS submitted_judges,
+                NULL AS override_rank,
+                NULL AS override_reason
+            FROM teams t
+            LEFT JOIN team_round_avgs tra ON tra.team_id = t.id
+            WHERE 1=1 {category_filter}
+            GROUP BY t.id, t.name, t.category
+            ORDER BY avg_percentage DESC, team_name ASC
+            """,
+            tuple(query_params),
+        ).fetchall()
 
     auto_sorted = sorted(
         rows,
         key=lambda r: (
-            -float(r["avg_percentage"]),
-            -float(r["secondary_score"]),
+            -float(r["avg_percentage"] or 0),
+            -float(r["secondary_score"] or 0),
             r["team_name"],
         ),
     )
     overrides = {
         int(r["override_rank"]): r["team_id"]
         for r in rows
-        if r["override_rank"] is not None
+        if r.get("override_rank") is not None
     }
     used_teams = set(overrides.values())
     final_ranked = []
@@ -463,13 +525,17 @@ def _build_rankings(db, round_id):
         if rank in overrides:
             row = next(r for r in rows if r["team_id"] == overrides[rank])
         else:
-            row = next_auto[auto_idx]
-            auto_idx += 1
+            if auto_idx < len(next_auto):
+                row = next_auto[auto_idx]
+                auto_idx += 1
+            else:
+                break
         out = dict(row)
         out["rank"] = rank
         final_ranked.append(out)
         rank += 1
     return final_ranked
+
 
 
 def register_routes(app):
@@ -743,11 +809,12 @@ def register_routes(app):
             return err
         teams = db.execute(
             """
-            SELECT t.id, t.name, t.problem_statement, t.expected_solution
+            SELECT t.id, t.name, t.ps_id, t.category, t.problem_statement, t.expected_solution
             FROM teams t
             ORDER BY t.name
             """
         ).fetchall()
+
         out = []
         for t in teams:
             assigned = 0
@@ -776,13 +843,15 @@ def register_routes(app):
             db = get_db()
             db.execute(
                 """
-                INSERT INTO teams (name, problem_statement, expected_solution)
-                VALUES (?, ?, ?)
+                INSERT INTO teams (name, ps_id, problem_statement, expected_solution, category)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 (
                     name,
+                    (payload.get("ps_id") or "").strip(),
                     payload.get("problem_statement") or "",
                     payload.get("expected_solution") or "",
+                    payload.get("category") or "SW",
                 ),
             )
         return jsonify({"success": True}), 201
@@ -805,6 +874,12 @@ def register_routes(app):
         if "expected_solution" in payload:
             fields.append("expected_solution = ?")
             values.append(payload.get("expected_solution") or "")
+        if "ps_id" in payload:
+            fields.append("ps_id = ?")
+            values.append((payload.get("ps_id") or "").strip())
+        if "category" in payload:
+            fields.append("category = ?")
+            values.append(payload.get("category") or "SW")
         if not fields:
             return jsonify({"error": "No updates provided"}), 400
         values.append(team_id)
@@ -827,6 +902,58 @@ def register_routes(app):
         if not deleted:
             return jsonify({"error": "Team not found"}), 404
         return jsonify({"success": True})
+
+    @app.get("/api/admin/teams/<int:team_id>/details")
+    @role_required("admin")
+    def team_details(_user, team_id):
+        db = get_db()
+        team = db.execute(
+            "SELECT id, name, ps_id, category, problem_statement, expected_solution FROM teams WHERE id = ? LIMIT 1",
+            (team_id,)
+        ).fetchone()
+        if not team:
+            return jsonify({"error": "Team not found"}), 404
+
+        # Scores across all rounds
+        scores = db.execute(
+            """
+            SELECT
+                r.name AS round_name,
+                u.name AS judge_name,
+                c.name AS criterion_name,
+                s.score,
+                c.max_score
+            FROM round_final_scores s
+            JOIN rounds r ON r.id = s.round_id
+            JOIN users u ON u.id = s.judge_id
+            JOIN round_criteria c ON c.id = s.criterion_id
+            WHERE s.team_id = ?
+            ORDER BY r.sequence, u.name, c.id
+            """,
+            (team_id,)
+        ).fetchall()
+
+        # Remarks across all rounds
+        remarks = db.execute(
+            """
+            SELECT
+                r.name AS round_name,
+                u.name AS judge_name,
+                rm.text AS remarks
+            FROM round_final_remarks rm
+            JOIN rounds r ON r.id = rm.round_id
+            JOIN users u ON u.id = rm.judge_id
+            WHERE rm.team_id = ?
+            ORDER BY r.sequence, u.name
+            """,
+            (team_id,)
+        ).fetchall()
+
+        return jsonify({
+            "team": dict(team),
+            "scores": [dict(s) for s in scores],
+            "remarks": [dict(rem) for rem in remarks]
+        })
 
     @app.get("/api/admin/criteria")
     @role_required("admin")
@@ -1012,6 +1139,7 @@ def register_routes(app):
                 u.name AS judge_name,
                 s.team_id,
                 t.name AS team_name,
+                t.category AS team_category,
                 s.criterion_id,
                 c.name AS criterion_name,
                 c.max_score,
@@ -1039,21 +1167,31 @@ def register_routes(app):
         ).fetchall()
         return jsonify(rows)
 
+
     @app.get("/api/admin/rankings")
     @role_required("admin")
     def rankings(_user):
         db = get_db()
-        rid, round_row, err = _resolve_round_id(db, required=True)
-        if err:
-            return err
-        rows = _build_rankings(db, rid)
+        round_param = request.args.get("round_id")
+        category = request.args.get("category")
+        
+        if round_param == "overall":
+            rid = None
+            round_row = {"id": "overall", "name": "Overall Leaderboard", "sequence": 999}
+        else:
+            rid, round_row, err = _resolve_round_id(db, requested=round_param, required=True)
+            if err:
+                return err
+        
+        rows = _build_rankings(db, rid, category=category)
         return jsonify(
             {
-                "round_id": rid,
+                "round_id": rid or "overall",
                 "round": round_row,
                 "rows": rows,
             }
         )
+
 
     @app.put("/api/admin/rankings/override")
     @role_required("admin")
@@ -1187,6 +1325,27 @@ def register_routes(app):
             download_name=f"hackathon_rankings_{safe_name}.csv",
         )
 
+    @app.get("/api/admin/teams/<int:team_id>/remarks")
+    @role_required("admin")
+    def get_team_remarks(_user, team_id):
+        db = get_db()
+        rows = db.execute(
+            """
+            SELECT
+                r.name AS round_name,
+                u.name AS judge_name,
+                rm.text AS remarks,
+                rm.updated_at
+            FROM round_final_remarks rm
+            JOIN rounds r ON r.id = rm.round_id
+            JOIN users u ON u.id = rm.judge_id
+            WHERE rm.team_id = ?
+            ORDER BY r.sequence, u.name
+            """,
+            (team_id,),
+        ).fetchall()
+        return jsonify(rows)
+
     @app.get("/api/admin/settings/submission-deadline")
     @role_required("admin")
     def get_deadline(_user):
@@ -1231,6 +1390,8 @@ def register_routes(app):
             SELECT
                 t.id,
                 t.name,
+                t.ps_id,
+                t.category,
                 CASE WHEN fs.id IS NULL THEN 0 ELSE 1 END AS is_submitted,
                 fs.submitted_at,
                 COALESCE(draft_counts.score_count, 0) AS draft_score_count,
