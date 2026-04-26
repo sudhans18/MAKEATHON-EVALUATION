@@ -6,6 +6,18 @@ from app import create_app
 from db import get_db, transaction
 
 
+def _table_columns(db, table_name):
+    rows = db.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {row["name"] for row in rows}
+
+
+def _extract_ps_id(statement):
+    if not statement:
+        return ""
+    head = statement.split("|", 1)[0].strip()
+    return head if head else ""
+
+
 def seed():
     app = create_app()
     with app.app_context():
@@ -78,17 +90,28 @@ def seed():
                 ("PANJAMUM BUDGET - UHM", "IS0807 | ApexFlow Technologies - Smart Receipt & Budget Categorizer", "\u2022 Design a mobile-friendly web app that allows users to upload a picture of their receipts\n\u2022 Parse the receipt to determine the total amount and automatically categorize the expense using AI\n\u2022 Display the information in a neat and clean JSON format using an LLM prompt and Optical Character Recognition API", "SW"),
                 ("super nova", "SW0402 | Software - UPI/Wallet Scam Early-Warning Coach for First Time Users", "\u2022 Behavioral analysis of transaction patterns and anomalies\n\u2022 Detection of contextual risk signals (unusual activity, rapid OTP usage)\n\u2022 Call/SMS pattern monitoring without violating privacy\n\u2022 AI-based adaptive risk scoring models\n\u2022 Real-time alerts, voice warnings, and transaction delay mechanisms", "SW"),
             ]
+            team_columns = _table_columns(db, "teams")
+            has_category = "category" in team_columns
+            has_ps_id = "ps_id" in team_columns
+
             for name, statement, expected, category in teams:
                 existing = db.execute(
                     "SELECT id FROM teams WHERE name = ? LIMIT 1", (name,)
                 ).fetchone()
                 if not existing:
+                    insert_cols = ["name", "problem_statement", "expected_solution"]
+                    insert_vals = [name, statement, expected]
+                    if has_category:
+                        insert_cols.append("category")
+                        insert_vals.append(category)
+                    if has_ps_id:
+                        insert_cols.append("ps_id")
+                        insert_vals.append(_extract_ps_id(statement))
+
+                    placeholders = ", ".join(["?"] * len(insert_cols))
                     db.execute(
-                        """
-                        INSERT INTO teams (name, problem_statement, expected_solution, category)
-                        VALUES (?, ?, ?, ?)
-                        """,
-                        (name, statement, expected, category),
+                        f"INSERT INTO teams ({', '.join(insert_cols)}) VALUES ({placeholders})",
+                        tuple(insert_vals),
                     )
 
             criteria = [

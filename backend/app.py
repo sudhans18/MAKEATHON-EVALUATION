@@ -34,6 +34,23 @@ def _parse_iso_datetime(value):
         return None
 
 
+def _table_columns(db, table_name):
+    rows = db.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {row["name"] for row in rows}
+
+
+def _has_team_column(db, column_name):
+    return column_name in _table_columns(db, "teams")
+
+
+def _team_ps_id_expr(db, alias="t"):
+    return f"{alias}.ps_id" if _has_team_column(db, "ps_id") else "''"
+
+
+def _team_category_expr(db, alias="t"):
+    return f"{alias}.category" if _has_team_column(db, "category") else "'SW'"
+
+
 def _list_rounds(db):
     return db.execute(
         "SELECT id, name, sequence FROM rounds ORDER BY sequence, id"
@@ -373,12 +390,12 @@ def _submit_round_final_evaluation(db, judge_id, team_id, round_id, scores_paylo
 
 
 def _build_rankings(db, round_id, category=None):
-    # Base params for the query
-    
+    team_category_expr = _team_category_expr(db, "t")
+
     # Category filter where clause
     category_filter = ""
-    if category in ["HW", "SW"]:
-        category_filter = "AND t.category = ?"
+    if category in ["HW", "SW"] and _has_team_column(db, "category"):
+        category_filter = f"AND {team_category_expr} = ?"
 
     if round_id is not None:
         # Standard round rankings
@@ -406,7 +423,7 @@ def _build_rankings(db, round_id, category=None):
             query_params.extend([round_id, first_criterion_id])
         
         query_params.append(round_id) # for override join
-        if category in ["HW", "SW"]:
+        if category in ["HW", "SW"] and _has_team_column(db, "category"):
             query_params.append(category)
 
         rows = db.execute(
@@ -432,7 +449,7 @@ def _build_rankings(db, round_id, category=None):
             SELECT
                 t.id AS team_id,
                 t.name AS team_name,
-                t.category,
+                {team_category_expr} AS category,
                 ROUND(COALESCE(AVG(jt.total_score), 0), 4) AS avg_total_score,
                 ROUND(
                     CASE
@@ -451,7 +468,7 @@ def _build_rankings(db, round_id, category=None):
             LEFT JOIN round_ranking_overrides ro
                 ON ro.team_id = t.id AND ro.round_id = ?
             WHERE 1=1 {category_filter}
-            GROUP BY t.id, t.name, t.category, ro.override_rank, ro.reason
+            GROUP BY t.id, t.name, ro.override_rank, ro.reason
             ORDER BY avg_percentage DESC, secondary_score DESC, team_name ASC
             """,
             tuple(query_params),
@@ -459,7 +476,7 @@ def _build_rankings(db, round_id, category=None):
     else:
         # Overall rankings (Aggregate across all rounds)
         query_params = []
-        if category in ["HW", "SW"]:
+        if category in ["HW", "SW"] and _has_team_column(db, "category"):
             query_params.append(category)
 
         rows = db.execute(
@@ -486,7 +503,7 @@ def _build_rankings(db, round_id, category=None):
             SELECT
                 t.id AS team_id,
                 t.name AS team_name,
-                t.category,
+                {team_category_expr} AS category,
                 0 AS avg_total_score,
                 ROUND(AVG(tra.round_avg), 4) AS avg_percentage,
                 0 AS secondary_score,
@@ -496,7 +513,7 @@ def _build_rankings(db, round_id, category=None):
             FROM teams t
             LEFT JOIN team_round_avgs tra ON tra.team_id = t.id
             WHERE 1=1 {category_filter}
-            GROUP BY t.id, t.name, t.category
+            GROUP BY t.id, t.name
             ORDER BY avg_percentage DESC, team_name ASC
             """,
             tuple(query_params),
@@ -807,9 +824,12 @@ def register_routes(app):
         rid, _round_row, err = _resolve_round_id(db, required=False)
         if err:
             return err
+        ps_id_expr = _team_ps_id_expr(db, "t")
+        category_expr = _team_category_expr(db, "t")
         teams = db.execute(
-            """
-            SELECT t.id, t.name, t.ps_id, t.category, t.problem_statement, t.expected_solution
+            f"""
+            SELECT t.id, t.name, {ps_id_expr} AS ps_id, {category_expr} AS category,
+                   t.problem_statement, t.expected_solution
             FROM teams t
             ORDER BY t.name
             """
@@ -841,18 +861,23 @@ def register_routes(app):
             return jsonify({"error": "Team name is required"}), 400
         with transaction():
             db = get_db()
+            team_cols = _table_columns(db, "teams")
+            insert_cols = ["name", "problem_statement", "expected_solution"]
+            values = [
+                name,
+                payload.get("problem_statement") or "",
+                payload.get("expected_solution") or "",
+            ]
+            if "ps_id" in team_cols:
+                insert_cols.append("ps_id")
+                values.append((payload.get("ps_id") or "").strip())
+            if "category" in team_cols:
+                insert_cols.append("category")
+                values.append(payload.get("category") or "SW")
+            placeholders = ", ".join(["?"] * len(insert_cols))
             db.execute(
-                """
-                INSERT INTO teams (name, ps_id, problem_statement, expected_solution, category)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    name,
-                    (payload.get("ps_id") or "").strip(),
-                    payload.get("problem_statement") or "",
-                    payload.get("expected_solution") or "",
-                    payload.get("category") or "SW",
-                ),
+                f"INSERT INTO teams ({', '.join(insert_cols)}) VALUES ({placeholders})",
+                tuple(values),
             )
         return jsonify({"success": True}), 201
 
@@ -862,6 +887,8 @@ def register_routes(app):
         payload = request.get_json(silent=True) or {}
         fields = []
         values = []
+        db = get_db()
+        team_cols = _table_columns(db, "teams")
         if "name" in payload:
             name = (payload.get("name") or "").strip()
             if not name:
@@ -874,17 +901,16 @@ def register_routes(app):
         if "expected_solution" in payload:
             fields.append("expected_solution = ?")
             values.append(payload.get("expected_solution") or "")
-        if "ps_id" in payload:
+        if "ps_id" in payload and "ps_id" in team_cols:
             fields.append("ps_id = ?")
             values.append((payload.get("ps_id") or "").strip())
-        if "category" in payload:
+        if "category" in payload and "category" in team_cols:
             fields.append("category = ?")
             values.append(payload.get("category") or "SW")
         if not fields:
             return jsonify({"error": "No updates provided"}), 400
         values.append(team_id)
         with transaction():
-            db = get_db()
             updated = db.execute(
                 f"UPDATE teams SET {', '.join(fields)} WHERE id = ?",
                 tuple(values),
@@ -907,8 +933,15 @@ def register_routes(app):
     @role_required("admin")
     def team_details(_user, team_id):
         db = get_db()
+        ps_id_expr = _team_ps_id_expr(db)
+        category_expr = _team_category_expr(db)
         team = db.execute(
-            "SELECT id, name, ps_id, category, problem_statement, expected_solution FROM teams WHERE id = ? LIMIT 1",
+            f"""
+            SELECT id, name, {ps_id_expr} AS ps_id, {category_expr} AS category,
+                   problem_statement, expected_solution
+            FROM teams
+            WHERE id = ? LIMIT 1
+            """,
             (team_id,)
         ).fetchone()
         if not team:
@@ -1132,14 +1165,15 @@ def register_routes(app):
         rid, _round_row, err = _resolve_round_id(db, required=True)
         if err:
             return err
+        category_expr = _team_category_expr(db, "t")
         rows = db.execute(
-            """
+            f"""
             SELECT
                 s.judge_id,
                 u.name AS judge_name,
                 s.team_id,
                 t.name AS team_name,
-                t.category AS team_category,
+                {category_expr} AS team_category,
                 s.criterion_id,
                 c.name AS criterion_name,
                 c.max_score,
@@ -1385,13 +1419,15 @@ def register_routes(app):
         rid, round_row, err = _resolve_round_id(db, required=True)
         if err:
             return err
+        ps_id_expr = _team_ps_id_expr(db, "t")
+        category_expr = _team_category_expr(db, "t")
         rows = db.execute(
-            """
+            f"""
             SELECT
                 t.id,
                 t.name,
-                t.ps_id,
-                t.category,
+                {ps_id_expr} AS ps_id,
+                {category_expr} AS category,
                 CASE WHEN fs.id IS NULL THEN 0 ELSE 1 END AS is_submitted,
                 fs.submitted_at,
                 COALESCE(draft_counts.score_count, 0) AS draft_score_count,
